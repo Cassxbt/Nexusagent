@@ -13,5 +13,6 @@ cache/
 .nexus-risk-state.json
 .nexus-test.db
 
-# Local-only markdown files
+# Local-only markdown files (README.md is explicitly allowed)
 *.md
+!README.md
