@@ -13,7 +13,7 @@ const ARBITRUM_TOKENS: Record<string, TokenInfo> = {
   USDT: { address: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9', decimals: 6, symbol: 'USDT' },
   USDC: { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', decimals: 6, symbol: 'USDC' },
   DAI: { address: '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1', decimals: 18, symbol: 'DAI' },
-  XAUT: { address: '0x68749665FF8D2d112Fa859AA293f07A622782F38', decimals: 6, symbol: 'XAUT' },
+  XAUT: { address: '0x68749665FF8D2d112Fa859AA293F07A622782F38', decimals: 6, symbol: 'XAUT' },
 };
 
 // Ethereum Mainnet (secondary)
@@ -23,7 +23,7 @@ const ETHEREUM_TOKENS: Record<string, TokenInfo> = {
   USDT: { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6, symbol: 'USDT' },
   USDC: { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6, symbol: 'USDC' },
   DAI: { address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', decimals: 18, symbol: 'DAI' },
-  XAUT: { address: '0x68749665FF8D2d112Fa859AA293f07A622782F38', decimals: 6, symbol: 'XAUT' },
+  XAUT: { address: '0x68749665FF8D2d112Fa859AA293F07A622782F38', decimals: 6, symbol: 'XAUT' },
 };
 
 const CHAIN_TOKENS: Record<string, Record<string, TokenInfo>> = {

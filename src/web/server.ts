@@ -29,6 +29,7 @@ import {
   deleteWebSession,
   type WebSession,
 } from './auth.js';
+import { readServiceHeartbeat } from '../core/heartbeat.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -205,9 +206,9 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
   const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
   const xautAddr = resolveTokenAddress('XAUT', 'ethereum');
   const [wethRaw, usdtRaw, xautRaw, ethPrice, fearGreed, goldSignal] = await Promise.all([
-    wethAddr ? account.getTokenBalance(wethAddr) : Promise.resolve(0n),
-    usdtAddr ? account.getTokenBalance(usdtAddr) : Promise.resolve(0n),
-    xautAddr ? account.getTokenBalance(xautAddr) : Promise.resolve(0n),
+    wethAddr ? account.getTokenBalance(wethAddr).catch(() => 0n) : Promise.resolve(0n),
+    usdtAddr ? account.getTokenBalance(usdtAddr).catch(() => 0n) : Promise.resolve(0n),
+    xautAddr ? account.getTokenBalance(xautAddr).catch(() => 0n) : Promise.resolve(0n),
     pricing.getCurrentPrice('ETH', 'USD').catch(() => 0),
     getFearGreedSignal(),
     getGoldSignal(),
@@ -497,10 +498,27 @@ export function createWebServer(port = 3000): void {
       walletFunded = balance > 0n;
     } catch { /* non-blocking */ }
 
+    const autopilotModule = await import('../agents/autopilot.js').catch(() => ({ isAutopilotRunning: () => false }));
+    const autopilotRunning = autopilotModule.isAutopilotRunning();
+    const heartbeat = readServiceHeartbeat({
+      autopilotRunning,
+      expectedCycleMs: 5 * 60 * 1000,
+    });
+
+    const status = (
+      heartbeat.status === 'ok'
+      && autopilotRunning
+      && walletFunded
+    ) ? 'ok' : 'degraded';
+
     res.json({
-      status: 'ok',
+      status,
       agents: ['coordinator', 'treasury', 'market', 'swap', 'yield', 'risk', 'bridge'],
-      autopilot: (await import('../agents/autopilot.js').catch(() => ({ isAutopilotRunning: () => false }))).isAutopilotRunning(),
+      autopilot: {
+        running: autopilotRunning,
+        ...heartbeat.autopilot,
+      },
+      heartbeat,
       wallet: walletAddress !== 'unknown' ? `${walletAddress.slice(0, 10)}...${walletAddress.slice(-8)}` : 'unavailable',
       walletFunded,
       chain: 'Arbitrum One',
