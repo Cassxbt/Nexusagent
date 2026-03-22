@@ -184,7 +184,16 @@ export function evaluateTreasuryPolicy(
   const yieldPercent = totalUsd > 0 ? state.aaveCollateralUsd / totalUsd : 0;
 
   const fearGreed = signals.fearGreedValue ?? 50;
+
+  // Risk-off: Fear & Greed ≤ 40 (fear/extreme fear on 0-100 scale) signals broad risk aversion —
+  // historically correlates with flight to safe-haven assets like gold.
+  // Gold 24h > 1.5% is an independent macro stress signal (USD weakness or geopolitical shock).
+  // Either condition alone is sufficient to trigger defensive repositioning into XAUT.
   const riskOff = fearGreed <= 40 || (signals.gold24hChangePct ?? 0) > 1.5;
+
+  // Risk-on: Fear & Greed ≥ 65 (greed territory) combined with flat gold (≤ 0.5%)
+  // indicates risk appetite is returning and the defensive XAUT position can be trimmed.
+  // Both conditions required together to avoid premature rebalancing on noise.
   const riskOn = fearGreed >= 65 && (signals.gold24hChangePct ?? 0) <= 0.5;
 
   const plans: TreasuryActionPlan[] = [];

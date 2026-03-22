@@ -10,6 +10,20 @@ async function main() {
   initWdk();
   console.log('WDK initialized.');
 
+  // Verify NexusGuard on-chain status — determines whether autonomous execution is permitted.
+  // Autonomous actors (autopilot, rules) require on-chain guard data and will block if unavailable.
+  // Manual user-initiated flows still work under config-backed limits.
+  const { getGuardParams } = await import('./core/guard.js');
+  const guard = await getGuardParams();
+  if (guard.source === 'on-chain') {
+    console.log(`NexusGuard on-chain ✓  maxTx=$${guard.maxTransactionUsdt}  daily=$${guard.dailyLimitUsdt}  slippage=${guard.maxSlippagePercent}%  paused=${guard.paused}`);
+    console.log('Autonomous execution: ENABLED');
+  } else {
+    console.warn('NexusGuard: not reachable — NEXUS_GUARD_ADDRESS not set or RPC unavailable');
+    console.warn('Autonomous execution: BLOCKED (autopilot and rules will not transact until on-chain guard is available)');
+    console.warn('Manual user chat actions remain available under config-backed limits.');
+  }
+
   const webPort = parseInt(process.env.WEB_PORT ?? '3000', 10);
   createWebServer(webPort);
 

@@ -388,13 +388,23 @@ async function checkHealthFactor(userId: string, cfg: AutopilotConfig): Promise<
       status: healthFactor < cfg.healthFactorCritical ? 'fail' : healthFactor < cfg.healthFactorWarn ? 'warn' : 'pass',
     });
 
-    // CRITICAL: autonomously execute protective withdrawal
     if (healthFactor < cfg.healthFactorCritical && healthFactor > 0) {
       emitEvent({ type: 'health_alert', healthFactor, tier: 'critical' });
+
+      // A health factor < 1.2 always implies debt exists.
+      // Repaying debt directly improves HF; withdrawing collateral would worsen it.
+      // Formula: repay = debt × (1 − currentHF / targetHF)
+      const debtUsd = Number(data.totalDebtBase) / 1e8;
+      const policy = getOrCreateTreasuryPolicy(userId);
+      const repayAmount = Math.max(10, Math.min(
+        debtUsd * (1 - healthFactor / cfg.healthFactorWarn),
+        policy.maxActionUsdt,
+      ));
+
       logReasoning({
         agent: 'Autopilot',
-        action: 'autonomous-withdraw',
-        reasoning: `Health factor ${healthFactor.toFixed(2)} below critical threshold ${cfg.healthFactorCritical} — initiating protective withdrawal`,
+        action: 'health-protection',
+        reasoning: `Health factor ${healthFactor.toFixed(2)} below critical ${cfg.healthFactorCritical} — repaying $${repayAmount.toFixed(2)} USDT debt to restore HF`,
         status: 'warn',
       });
 
@@ -402,30 +412,30 @@ async function checkHealthFactor(userId: string, cfg: AutopilotConfig): Promise<
       try {
         const response = await executeSystemDecision({
           agent: 'yield',
-          intent: 'withdraw',
-          params: { amount: '50', token: 'USDT', chain: 'ethereum' },
+          intent: 'repay',
+          params: { amount: repayAmount.toFixed(2), token: 'USDT', chain: 'ethereum', rateMode: '2' },
           receiptContext: {
             source: 'autopilot',
             policy: 'health_factor_protection',
             reason: `Health factor ${healthFactor.toFixed(2)} fell below critical threshold ${cfg.healthFactorCritical}.`,
-            summary: 'Protective Aave withdrawal triggered by health-factor guard.',
+            summary: `Autonomous USDT debt repayment of $${repayAmount.toFixed(2)} to restore health factor.`,
           },
         }, userId, 'autopilot');
         txResult = response.success
-          ? `Autonomous withdrawal executed: ${response.message}`
-          : `Autonomous withdrawal failed: ${response.message}`;
+          ? `Debt repayment executed: ${response.message}`
+          : `Debt repayment failed: ${response.message}`;
 
         logReasoning({
           agent: 'Autopilot',
-          action: 'autonomous-withdraw',
+          action: 'health-protection',
           reasoning: txResult,
           status: response.success ? 'pass' : 'fail',
         });
       } catch (err) {
-        txResult = `Autonomous withdrawal error: ${err instanceof Error ? err.message : String(err)}`;
+        txResult = `Health protection error: ${err instanceof Error ? err.message : String(err)}`;
         logReasoning({
           agent: 'Autopilot',
-          action: 'autonomous-withdraw',
+          action: 'health-protection',
           reasoning: txResult,
           status: 'fail',
         });
@@ -440,7 +450,8 @@ async function checkHealthFactor(userId: string, cfg: AutopilotConfig): Promise<
     }
 
     return null;
-  } catch {
+  } catch (err) {
+    console.warn('[Autopilot] Health factor check failed:', err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -542,9 +553,12 @@ async function checkApyDrop(userId: string, cfg: AutopilotConfig): Promise<strin
     };
 
     const pool = data.find(
-      p => p.project === 'aave-v3' && p.chain === 'Arbitrum' && p.symbol.toUpperCase().includes('USDT'),
+      p => (p.project === 'aave-v3' || p.project === 'aave') && p.chain === 'Arbitrum' && p.symbol.toUpperCase().includes('USDT'),
     );
-    if (!pool || typeof pool.apy !== 'number') return null;
+    if (!pool || typeof pool.apy !== 'number') {
+      console.warn('[Autopilot] Aave USDT pool not found on Llama.fi — APY monitoring skipped this cycle');
+      return null;
+    }
 
     const currentApy = pool.apy;
 
@@ -582,7 +596,8 @@ async function checkApyDrop(userId: string, cfg: AutopilotConfig): Promise<strin
     // Update baseline on normal cycles
     setBaselineApy(userId, currentApy);
     return null;
-  } catch {
+  } catch (err) {
+    console.warn('[Autopilot] APY check failed:', err instanceof Error ? err.message : String(err));
     return null;
   }
 }

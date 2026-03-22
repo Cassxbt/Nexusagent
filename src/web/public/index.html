@@ -1344,7 +1344,8 @@ Ask me anything about your wallet, or say "swap 10 USDT for ETH" to get started.
     document.getElementById('stat-reserve').textContent = formatCurrency(balances.usdt);
     document.getElementById('stat-reserve-meta').textContent = `${formatPercent(balances.reservePct)} in wallet USDT`;
     document.getElementById('stat-xaut').textContent = formatCurrency(balances.xautUsdValue);
-    document.getElementById('stat-xaut-meta').textContent = `${formatPercent(balances.xautPct)} defensive allocation`;
+    const xautChange = regime.gold24hChangePct != null ? ` · gold 24h ${Number(regime.gold24hChangePct) >= 0 ? '+' : ''}${Number(regime.gold24hChangePct).toFixed(2)}%` : '';
+    document.getElementById('stat-xaut-meta').textContent = `${formatPercent(balances.xautPct)} defensive allocation${xautChange}`;
     document.getElementById('stat-aave').textContent = formatCurrency(balances.aaveCollateralUsd);
     document.getElementById('stat-aave-meta').textContent = `${formatPercent(balances.yieldPct)} deployed | debt ${formatCurrency(balances.aaveDebtUsd)}`;
     document.getElementById('stat-regime').textContent = regime.posture ? regime.posture.toUpperCase() : 'UNKNOWN';

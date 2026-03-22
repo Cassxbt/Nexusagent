@@ -175,12 +175,27 @@ export function setRuleEnabled(userId: string, id: string, enabled: boolean): bo
   return result.changes > 0;
 }
 
-// Per-rule baseline tracking for drops_by_pct operator.
-// Maps rule.id → last-seen metric value.
-const ruleBaselines = new Map<string, number>();
-
 // Cooldown: a rule won't fire again within this many seconds of its last firing.
 const RULE_COOLDOWN_SECS = 60 * 60; // 1 hour
+
+function getRuleBaseline(ruleId: string, userId: string): number | undefined {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT metric_value FROM rule_baselines WHERE rule_id = ? AND user_id = ?',
+  ).get(ruleId, userId) as { metric_value: number } | undefined;
+  return row?.metric_value;
+}
+
+function setRuleBaseline(ruleId: string, userId: string, value: number): void {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO rule_baselines (rule_id, user_id, metric_value, updated_at)
+    VALUES (?, ?, ?, unixepoch())
+    ON CONFLICT(rule_id, user_id) DO UPDATE SET
+      metric_value = excluded.metric_value,
+      updated_at = excluded.updated_at
+  `).run(ruleId, userId, value);
+}
 
 /** Evaluate all active rules against current metrics. Returns fired rule alerts. */
 export async function evaluateRules(userId: string, metrics: RuleMetrics): Promise<string[]> {
@@ -199,7 +214,6 @@ export async function evaluateRules(userId: string, metrics: RuleMetrics): Promi
       continue;
     }
 
-    // Get the current metric value
     let currentValue: number | undefined;
     switch (condition.metric) {
       case 'apy': currentValue = metrics.apy; break;
@@ -211,23 +225,18 @@ export async function evaluateRules(userId: string, metrics: RuleMetrics): Promi
 
     if (currentValue === undefined) continue;
 
-    // Evaluate the predicate
     let fired = false;
     switch (condition.operator) {
       case 'below': fired = currentValue < condition.value; break;
       case 'above': fired = currentValue > condition.value; break;
       case 'drops_by_pct': {
-        // Track per-rule baseline. Fire when current is >value% below the baseline.
-        const baselineKey = rule.id;
-        const baseline = ruleBaselines.get(baselineKey);
+        const baseline = getRuleBaseline(rule.id, userId);
         if (baseline === undefined) {
-          // First time seeing this rule — store current as baseline, don't fire
-          ruleBaselines.set(baselineKey, currentValue);
+          setRuleBaseline(rule.id, userId, currentValue);
         } else if (baseline > 0) {
           const dropPct = ((baseline - currentValue) / baseline) * 100;
           fired = dropPct >= condition.value;
-          // Update baseline on fire so the same drop doesn't re-trigger after cooldown
-          if (fired) ruleBaselines.set(baselineKey, currentValue);
+          if (fired) setRuleBaseline(rule.id, userId, currentValue);
         }
         break;
       }

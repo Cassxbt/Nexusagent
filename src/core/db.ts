@@ -142,6 +142,14 @@ function migrate(db: Database.Database): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_rules_user_created
       ON rules (user_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS rule_baselines (
+      rule_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      metric_value REAL NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (rule_id, user_id)
+    );
   `);
 }
 
