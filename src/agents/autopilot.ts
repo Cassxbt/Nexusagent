@@ -313,7 +313,7 @@ async function runUserAutopilotCycle(userId: string, cfg: AutopilotConfig): Prom
   }
 
   try {
-    const healthAlert = await checkHealthFactor(userId, cfg);
+    const healthAlert = await checkHealthFactor(userId, cfg, cycleUsdtBal);
     emitEvent({ type: 'evaluate', check: 'health-factor', result: healthAlert ? 'alert triggered' : 'healthy', status: healthAlert ? 'warn' : 'pass' });
     if (healthAlert) alerts.push(healthAlert);
   } catch (err) {
@@ -373,7 +373,7 @@ async function runUserAutopilotCycle(userId: string, cfg: AutopilotConfig): Prom
   return alerts;
 }
 
-async function checkHealthFactor(userId: string, cfg: AutopilotConfig): Promise<string | null> {
+async function checkHealthFactor(userId: string, cfg: AutopilotConfig, walletUsdtBal: number): Promise<string | null> {
   try {
     const account = await getAccount('ethereum', { userId });
     const lending = account.getLendingProtocol('aave') as unknown as InstanceType<typeof AaveProtocolEvm>;
@@ -399,6 +399,7 @@ async function checkHealthFactor(userId: string, cfg: AutopilotConfig): Promise<
       const repayAmount = Math.max(10, Math.min(
         debtUsd * (1 - healthFactor / cfg.healthFactorWarn),
         policy.maxActionUsdt,
+        walletUsdtBal,  // never try to repay more than the wallet holds
       ));
 
       logReasoning({

@@ -309,6 +309,23 @@ async function executeRuleAction(userId: string, rule: StoredRule, currentValue:
       }
     }
 
+    case 'swap': {
+      try {
+        const amount = action.amount ?? '50';
+        const tokenIn = action.token ?? 'USDT';
+        const tokenOut = tokenIn === 'USDT' ? 'XAUT' : 'USDT';
+        const result = await executeSystemDecision({
+          agent: 'swap',
+          intent: 'execute_swap',
+          params: { tokenIn, tokenOut, amount, chain: 'ethereum' },
+        }, userId, 'rules');
+        emitEvent({ type: 'act', action: 'rule_swap', txHash: (result.data as Record<string, unknown>)?.hash as string, success: result.success, message: result.message });
+        return `📋 *Rule Triggered:* "${rule.naturalLanguage}"\n${result.message}`;
+      } catch (err) {
+        return `📋 *Rule Fired (action failed):* "${rule.naturalLanguage}"\n${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
     default:
       return `📋 *Rule Fired:* "${rule.naturalLanguage}" (${context}) — action "${action.type}" noted`;
   }
