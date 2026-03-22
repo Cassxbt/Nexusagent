@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { normalizeBridgeRecipient } from '../../src/agents/bridge.js';
 
-// Bridge agent validation logic (tested without WDK dependency)
 const SUPPORTED_TARGET_CHAINS = ['ethereum', 'base', 'polygon', 'optimism'];
 
 describe('bridge validation', () => {
@@ -31,9 +31,9 @@ describe('bridge validation', () => {
   });
 
   it('validates target address format', () => {
-    const isAddress = (a: string) => /^0x[0-9a-fA-F]{40}$/.test(a);
-    expect(isAddress('0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9')).toBe(true);
-    expect(isAddress('0xinvalid')).toBe(false);
-    expect(isAddress('not-an-address')).toBe(false);
+    expect(normalizeBridgeRecipient('0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9')).toBe('0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9');
+    expect(() => normalizeBridgeRecipient('0xinvalid')).toThrow(/invalid bridge recipient/i);
+    expect(() => normalizeBridgeRecipient('not-an-address')).toThrow(/invalid bridge recipient/i);
+    expect(() => normalizeBridgeRecipient('0x0000000000000000000000000000000000000000')).toThrow(/zero address/i);
   });
 });

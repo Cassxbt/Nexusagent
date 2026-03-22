@@ -11,6 +11,7 @@ import { evaluateTreasuryPolicy, getOrCreateTreasuryPolicy, type TreasurySignals
 import type { Bot } from 'grammy';
 import { executeSystemDecision } from './coordinator.js';
 import { getDb } from '../core/db.js';
+import { markAutopilotCycleCompleted, markAutopilotCycleStarted } from '../core/heartbeat.js';
 
 interface AutopilotConfig {
   intervalMs: number;
@@ -208,63 +209,83 @@ async function runAutopilotCycle(cfg: AutopilotConfig): Promise<void> {
 
   const cycleStart = Date.now();
   const cycleId = `cycle-${cycleStart}`;
+  markAutopilotCycleStarted(cycleStart);
 
-  emitEvent({ type: 'cycle_start', cycleId });
+  try {
+    emitEvent({ type: 'cycle_start', cycleId });
 
-  logReasoning({
-    agent: 'Autopilot',
-    action: 'cycle-start',
-    reasoning: 'Running autonomous monitoring cycle',
-    status: 'pass',
-  });
-
-  const alertsByUser = new Map<string, string[]>();
-  const autopilotUsers = getAutopilotUserIds();
-
-  for (const userId of autopilotUsers) {
-    try {
-      const alerts = await runUserAutopilotCycle(userId, cfg);
-      if (alerts.length > 0) {
-        alertsByUser.set(userId, alerts);
-      }
-    } catch (err) {
-      console.error(`[Autopilot] User cycle failed for ${userId}:`, err);
-    }
-  }
-
-  const totalAlerts = Array.from(alertsByUser.values()).reduce((sum, list) => sum + list.length, 0);
-  emitEvent({ type: 'cycle_complete', alertCount: totalAlerts, durationMs: Date.now() - cycleStart });
-
-  // Send alerts to all monitored users and web clients
-  if (alertsByUser.size > 0) {
-    for (const [userId, alerts] of alertsByUser) {
-      const message = `🤖 *Autopilot Alert*\n\n${alerts.join('\n\n')}`;
-
-      logReasoning({
-        agent: 'Autopilot',
-        action: 'alert',
-        reasoning: `Sending ${alerts.length} alert(s) for ${userId}`,
-        result: alerts.join('; '),
-        status: 'warn',
-      });
-
-      if (monitoredUsers.has(userId)) {
-        for (const cb of alertCallbacks) {
-          await cb(userId, message);
-        }
-      }
-
-      for (const broadcast of broadcastCallbacks) {
-        broadcast(userId === DEMO_USER_ID ? message : `${message}\n\n_User: ${userId}_`);
-      }
-    }
-  } else {
     logReasoning({
       agent: 'Autopilot',
-      action: 'cycle-complete',
-      reasoning: 'No alerts — all systems normal',
+      action: 'cycle-start',
+      reasoning: 'Running autonomous monitoring cycle',
       status: 'pass',
     });
+
+    const alertsByUser = new Map<string, string[]>();
+    const autopilotUsers = getAutopilotUserIds();
+
+    for (const userId of autopilotUsers) {
+      try {
+        const alerts = await runUserAutopilotCycle(userId, cfg);
+        if (alerts.length > 0) {
+          alertsByUser.set(userId, alerts);
+        }
+      } catch (err) {
+        console.error(`[Autopilot] User cycle failed for ${userId}:`, err);
+      }
+    }
+
+    const totalAlerts = Array.from(alertsByUser.values()).reduce((sum, list) => sum + list.length, 0);
+    const durationMs = Date.now() - cycleStart;
+    emitEvent({ type: 'cycle_complete', alertCount: totalAlerts, durationMs });
+    markAutopilotCycleCompleted({
+      success: true,
+      durationMs,
+      alertCount: totalAlerts,
+      completedAtMs: Date.now(),
+    });
+
+    // Send alerts to all monitored users and web clients
+    if (alertsByUser.size > 0) {
+      for (const [userId, alerts] of alertsByUser) {
+        const message = `🤖 *Autopilot Alert*\n\n${alerts.join('\n\n')}`;
+
+        logReasoning({
+          agent: 'Autopilot',
+          action: 'alert',
+          reasoning: `Sending ${alerts.length} alert(s) for ${userId}`,
+          result: alerts.join('; '),
+          status: 'warn',
+        });
+
+        if (monitoredUsers.has(userId)) {
+          for (const cb of alertCallbacks) {
+            await cb(userId, message);
+          }
+        }
+
+        for (const broadcast of broadcastCallbacks) {
+          broadcast(userId === DEMO_USER_ID ? message : `${message}\n\n_User: ${userId}_`);
+        }
+      }
+    } else {
+      logReasoning({
+        agent: 'Autopilot',
+        action: 'cycle-complete',
+        reasoning: 'No alerts — all systems normal',
+        status: 'pass',
+      });
+    }
+  } catch (err) {
+    const durationMs = Date.now() - cycleStart;
+    markAutopilotCycleCompleted({
+      success: false,
+      durationMs,
+      alertCount: 0,
+      completedAtMs: Date.now(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
 }
 

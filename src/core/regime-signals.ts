@@ -1,4 +1,5 @@
 import { pricing } from './pricing.js';
+import { markSourceHeartbeat } from './heartbeat.js';
 
 export interface FearGreedSignal {
   value: number | null;
@@ -49,6 +50,11 @@ export async function getFearGreedSignal(): Promise<FearGreedSignal> {
       source: 'alternative_me',
       fetchedAt: new Date().toISOString(),
     };
+    markSourceHeartbeat('fear-greed', 'ok', 'Alternative.me fear/greed fetched successfully', {
+      source: signal.source,
+      value: signal.value,
+      classification: signal.classification,
+    });
     fearGreedCache = { value: signal, expiresAt: Date.now() + TTL_MS };
     return signal;
   } catch {
@@ -58,6 +64,9 @@ export async function getFearGreedSignal(): Promise<FearGreedSignal> {
       source: 'unavailable',
       fetchedAt: new Date().toISOString(),
     };
+    markSourceHeartbeat('fear-greed', 'unavailable', 'Fear/greed signal unavailable', {
+      source: fallback.source,
+    });
     fearGreedCache = { value: fallback, expiresAt: Date.now() + TTL_MS };
     return fallback;
   }
@@ -85,6 +94,12 @@ export async function getGoldSignal(): Promise<GoldSignal> {
       source: 'gold_api',
       fetchedAt: new Date().toISOString(),
     };
+    markSourceHeartbeat('gold', 'ok', 'Gold spot and XAUT signal fetched successfully', {
+      source: signal.source,
+      spotUsd: signal.spotUsd,
+      xautUsd: signal.xautUsd,
+      change24hPct: signal.change24hPct,
+    });
     goldCache = { value: signal, expiresAt: Date.now() + TTL_MS };
     return signal;
   } catch {
@@ -96,6 +111,17 @@ export async function getGoldSignal(): Promise<GoldSignal> {
       source: xautUsd !== null ? 'xaut_fallback' : 'unavailable',
       fetchedAt: new Date().toISOString(),
     };
+    markSourceHeartbeat(
+      'gold',
+      fallback.source === 'xaut_fallback' ? 'degraded' : 'unavailable',
+      fallback.source === 'xaut_fallback'
+        ? 'Gold spot unavailable; using XAUT price fallback only'
+        : 'Gold and XAUT pricing unavailable',
+      {
+        source: fallback.source,
+        xautUsd: fallback.xautUsd,
+      },
+    );
     goldCache = { value: fallback, expiresAt: Date.now() + TTL_MS };
     return fallback;
   }

@@ -61,7 +61,31 @@ export const riskAgent: Agent = {
   },
 };
 
-const SYSTEM_ACTORS = new Set(['autopilot', 'rules']);
+const SYSTEM_ACTORS = new Set(['autopilot', 'rules', 'x402']);
+
+export function getRemainingCooldownSeconds(
+  lastSuccessfulTxAt: number | null,
+  cooldownSeconds: number,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
+): number {
+  if (!lastSuccessfulTxAt || cooldownSeconds <= 0) return 0;
+  return Math.max(0, (lastSuccessfulTxAt + cooldownSeconds) - nowSeconds);
+}
+
+function getLatestSuccessfulRiskGatedTransactionAt(userId: string): number | null {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT created_at
+    FROM tx_log
+    WHERE user_id = ?
+      AND status = 'success'
+      AND amount_usdt IS NOT NULL
+    ORDER BY created_at DESC
+    LIMIT 1
+  `).get(userId) as { created_at: number } | undefined;
+
+  return row?.created_at ?? null;
+}
 
 async function getUserLimits(userId: string): Promise<UserLimits> {
   // Per-user overrides in SQLite take highest priority
@@ -285,6 +309,16 @@ async function checkTransaction(
       riskScore: 10,
       riskTier: 'BLOCK' as RiskTier,
     };
+  }
+
+  const cooldownRemaining = getRemainingCooldownSeconds(
+    getLatestSuccessfulRiskGatedTransactionAt(userId),
+    guard.cooldownSeconds,
+  );
+  if (cooldownRemaining > 0) {
+    violations.push(
+      `Guard cooldown active for ${cooldownRemaining}s`,
+    );
   }
 
   // Per-transaction limit

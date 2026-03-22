@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { markSourceHeartbeat } from './heartbeat.js';
 
 /**
  * NexusGuard — on-chain risk parameter reader.
@@ -38,10 +39,19 @@ export async function getGuardParams(): Promise<OnChainRiskParams> {
   const contractAddress = process.env.NEXUS_GUARD_ADDRESS;
 
   if (!contractAddress) {
+    markSourceHeartbeat('guard', 'unavailable', 'NEXUS_GUARD_ADDRESS is not configured', {
+      source: 'config-fallback',
+    });
     return fallback('config-fallback');
   }
 
   if (_cache && Date.now() < _cache.expiresAt) {
+    markSourceHeartbeat(
+      'guard',
+      _cache.params.paused ? 'degraded' : (_cache.params.source === 'on-chain' ? 'ok' : 'unavailable'),
+      _cache.params.paused ? 'NexusGuard emergency pause is active' : `Guard source: ${_cache.params.source}`,
+      { source: _cache.params.source, paused: _cache.params.paused },
+    );
     return _cache.params;
   }
 
@@ -63,13 +73,25 @@ export async function getGuardParams(): Promise<OnChainRiskParams> {
     const json = await response.json() as { result?: string; error?: { message: string } };
 
     if (json.error || !json.result || json.result === '0x') {
+      markSourceHeartbeat('guard', 'unavailable', 'Guard contract call failed; using config fallback', {
+        source: 'config-fallback',
+      });
       return fallback('config-fallback');
     }
 
     const params = decodeGetParams(json.result);
+    markSourceHeartbeat(
+      'guard',
+      params.paused ? 'degraded' : 'ok',
+      params.paused ? 'NexusGuard emergency pause is active' : 'Guard parameters fetched on-chain',
+      { source: params.source, paused: params.paused },
+    );
     _cache = { params, expiresAt: Date.now() + CACHE_TTL_MS };
     return params;
   } catch {
+    markSourceHeartbeat('guard', 'unavailable', 'Guard RPC request failed; using config fallback', {
+      source: 'config-fallback',
+    });
     return fallback('config-fallback');
   }
 }

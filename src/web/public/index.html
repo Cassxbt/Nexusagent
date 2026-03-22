@@ -850,12 +850,6 @@ Ask me anything, or click a quick command on the left.</div>
   const policyStatusEl     = document.getElementById('policy-status');
   const dashboardSection   = document.getElementById('dashboard-section');
 
-  let GUEST_USER_ID = localStorage.getItem('nexus_guest_user_id');
-  if (!GUEST_USER_ID) {
-    GUEST_USER_ID = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    localStorage.setItem('nexus_guest_user_id', GUEST_USER_ID);
-  }
-
   let auth = loadAuthState();
   let ws = null;
   let pendingConfirm = false;
@@ -949,11 +943,7 @@ Ask me anything, or click a quick command on the left.</div>
   function buildWsUrl() {
     const params = new URLSearchParams();
     if (token) params.set('token', token);
-    if (auth?.sessionToken) {
-      params.set('session', auth.sessionToken);
-    } else {
-      params.set('guest', GUEST_USER_ID);
-    }
+    if (auth?.sessionToken) params.set('session', auth.sessionToken);
     const qs = params.toString();
     return qs ? `${wsProtocol}//${location.host}?${qs}` : `${wsProtocol}//${location.host}`;
   }
@@ -1057,6 +1047,10 @@ Ask me anything, or click a quick command on the left.</div>
     const regime   = dashboard.regime   || {};
     const receipts = Array.isArray(dashboard.receipts)     ? dashboard.receipts     : [];
     const x402     = Array.isArray(dashboard.x402Payments) ? dashboard.x402Payments : [];
+    const sourceHealth = dashboard.sourceHealth || {};
+    const heartbeat = dashboard.heartbeat || {};
+    const autopilot = dashboard.autopilot || {};
+    const execution = dashboard.execution || {};
 
     // Stat bar
     document.getElementById('stat-total').textContent   = formatCurrency(balances.totalUsdValue);
@@ -1079,16 +1073,21 @@ Ask me anything, or click a quick command on the left.</div>
       regime.gold24hChangePct != null ? `Gold ${Number(regime.gold24hChangePct).toFixed(2)}%` : 'Gold —',
     ].join(' · ');
 
-    const running = dashboard.autopilot?.running;
+    const running = autopilot.running;
+    const heartbeatStatus = (autopilot.status || heartbeat.status || 'degraded').toUpperCase();
     const apEl = document.getElementById('stat-autopilot');
-    apEl.textContent = running ? 'RUNNING' : 'PAUSED';
+    apEl.textContent = heartbeatStatus;
     apEl.className = `stat-chip-value ${running ? 'running' : 'paused'}`;
     const hf = balances.healthFactor;
     const hfText = hf && Number(hf) < 1e20 ? `HF ${Number(hf).toFixed(2)}` : 'No debt position';
     document.getElementById('stat-autopilot-meta').textContent = [
-      dashboard.wallet?.mode || 'EOA',
+      running ? 'cycle active' : 'paused',
+      autopilot.lastSucceededAt ? `last ok ${formatTimeAgo(autopilot.lastSucceededAt)}` : 'no successful cycle yet',
       hfText,
     ].join(' · ');
+    document.getElementById('chat-summary').textContent = dashboard.view === 'demo'
+      ? 'Read-only demo treasury. Live execution is disabled in this view.'
+      : execution.limitation || execution.model || '';
 
     // Dashboard section (only if open)
     if (!dashboardOpen) return;
@@ -1155,25 +1154,40 @@ Ask me anything, or click a quick command on the left.</div>
         <div class="receipt-row">
           <div>
             <div class="receipt-title">${escapeHtml(String(r.intent || '—'))}</div>
-            <div class="receipt-meta">${escapeHtml(String(r.agent || ''))}</div>
+            <div class="receipt-meta">${escapeHtml(String(r.summary || r.agent || ''))}</div>
+            <div class="receipt-meta">${escapeHtml(String(r.policyName || ''))}${r.policyReason ? ' · ' + escapeHtml(String(r.policyReason)) : ''}</div>
+            <div class="receipt-meta">${r.txHash ? escapeHtml(String(r.txHash)) : 'no tx hash recorded'} · ${formatTimeAgo(r.createdAt)}</div>
           </div>
           <div class="receipt-side">
             ${r.amountUsdt ? `$${Number(r.amountUsdt).toFixed(2)}<br>` : ''}
-            <span style="color:${r.status === 'ok' ? 'var(--green)' : 'var(--red)'}">${escapeHtml(String(r.status || ''))}</span>
+            <span style="color:${r.status === 'success' ? 'var(--green)' : 'var(--red)'}">${escapeHtml(String(r.status || ''))}</span>
           </div>
         </div>`).join('');
     }
 
     const opsList = document.getElementById('ops-list');
-    if (x402.length === 0) {
-      opsList.innerHTML = '<div class="muted-empty">No x402 activity recorded.</div>';
-    } else {
-      opsList.innerHTML = x402.map(p => `
+    const sourceRows = Object.entries(sourceHealth).map(([name, source]) => `
+      <div class="mini-row">
+        <span>${escapeHtml(name)} · ${escapeHtml(String(source.status || 'unknown'))}</span>
+        <span>${source.checkedAt ? escapeHtml(formatTimeAgo(source.checkedAt)) : 'n/a'}</span>
+      </div>`).join('');
+    const x402Rows = x402.map(p => `
         <div class="mini-row">
           <span>x402 payment · $${Number(p.amount_usdt || 0).toFixed(2)}</span>
-          <span style="color:${p.status === 'ok' ? 'var(--green)' : 'var(--text3)'}">${escapeHtml(String(p.status || ''))}</span>
+          <span style="color:${p.status === 'success' ? 'var(--green)' : 'var(--text3)'}">${escapeHtml(String(p.status || ''))}</span>
         </div>`).join('');
-    }
+    opsList.innerHTML = `
+      <div class="mini-row">
+        <span>execution model</span>
+        <span>${escapeHtml(String(execution.model || 'unknown'))}</span>
+      </div>
+      <div class="mini-row">
+        <span>execution signer</span>
+        <span>${escapeHtml(String(execution.strategyAddress || 'unavailable'))}</span>
+      </div>
+      ${sourceRows || '<div class="muted-empty">No source heartbeat data recorded.</div>'}
+      ${x402Rows || '<div class="muted-empty">No x402 activity recorded.</div>'}
+    `;
   }
 
   async function savePolicy() {
@@ -1205,16 +1219,9 @@ Ask me anything, or click a quick command on the left.</div>
 
   async function loadDemoSnapshot() {
     try {
-      const res = await apiFetch('/api/demo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenario: 'force_cycle' }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || 'Demo failed');
-      if (data.dashboard) renderDashboard(data.dashboard);
-      if (data.reasoning) renderReasoning(data.reasoning);
-      appendMessage('assistant', 'Demo scenario loaded. Autopilot cycle forced.');
+      dashboardView = 'demo';
+      await refreshDashboard('demo');
+      appendMessage('assistant', 'Judge demo loaded. Demo mode is read-only and safe to inspect.');
     } catch (err) {
       appendMessage('error', `Demo snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1291,7 +1298,7 @@ Ask me anything, or click a quick command on the left.</div>
     appendMessage('user', text);
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    ws.send(JSON.stringify({ type: 'message', content: text, userId: auth?.userId || GUEST_USER_ID }));
+    ws.send(JSON.stringify({ type: 'message', content: text }));
   }
 
   function sendCommand(text) {
@@ -1300,20 +1307,20 @@ Ask me anything, or click a quick command on the left.</div>
       return;
     }
     appendMessage('user', text);
-    ws.send(JSON.stringify({ type: 'message', content: text, userId: auth?.userId || GUEST_USER_ID }));
+    ws.send(JSON.stringify({ type: 'message', content: text }));
   }
 
   function confirmAction() {
     if (!ws) return;
     removeConfirmButtons();
-    ws.send(JSON.stringify({ type: 'confirm', userId: auth?.userId || GUEST_USER_ID }));
+    ws.send(JSON.stringify({ type: 'confirm' }));
   }
 
   function cancelAction() {
     if (!ws) return;
     removeConfirmButtons();
     pendingConfirm = false;
-    ws.send(JSON.stringify({ type: 'cancel', userId: auth?.userId || GUEST_USER_ID }));
+    ws.send(JSON.stringify({ type: 'cancel' }));
   }
 
   function removeConfirmButtons() {
@@ -1463,6 +1470,17 @@ Ask me anything, or click a quick command on the left.</div>
   function formatPercent(v) {
     if (v == null || isNaN(v)) return '0.0%';
     return Number(v).toFixed(1) + '%';
+  }
+
+  function formatTimeAgo(value) {
+    if (!value) return 'n/a';
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return 'n/a';
+    const diffMs = Date.now() - timestamp;
+    if (diffMs < 60_000) return `${Math.max(1, Math.round(diffMs / 1000))}s ago`;
+    if (diffMs < 3_600_000) return `${Math.round(diffMs / 60_000)}m ago`;
+    if (diffMs < 86_400_000) return `${Math.round(diffMs / 3_600_000)}h ago`;
+    return `${Math.round(diffMs / 86_400_000)}d ago`;
   }
 
   function escapeHtml(str) {

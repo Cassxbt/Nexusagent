@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateRiskScore, getTodayKey } from '../../src/agents/risk.js';
+import { calculateRiskScore, getRemainingCooldownSeconds, getTodayKey } from '../../src/agents/risk.js';
 
 const defaultLimits = { maxTransactionUsdt: 500, dailyLimitUsdt: 2000, maxSlippagePercent: 1 };
 
@@ -82,5 +82,19 @@ describe('getTodayKey', () => {
   it('returns YYYY-MM-DD format', () => {
     const key = getTodayKey();
     expect(key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('getRemainingCooldownSeconds', () => {
+  it('returns zero when no prior transaction exists', () => {
+    expect(getRemainingCooldownSeconds(null, 300, 1000)).toBe(0);
+  });
+
+  it('returns zero when cooldown has expired', () => {
+    expect(getRemainingCooldownSeconds(100, 300, 401)).toBe(0);
+  });
+
+  it('returns remaining cooldown when still active', () => {
+    expect(getRemainingCooldownSeconds(100, 300, 250)).toBe(150);
   });
 });

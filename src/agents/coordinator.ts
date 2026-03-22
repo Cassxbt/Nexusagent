@@ -1,4 +1,4 @@
-import { llmJson } from '../reasoning/llm.js';
+import { llmJson, llmComplete } from '../reasoning/llm.js';
 import { logReasoning, setActiveUser } from '../reasoning/logger.js';
 import { getContextSummary } from '../reasoning/memory.js';
 import { getDb } from '../core/db.js';
@@ -163,12 +163,38 @@ export async function executeDecision(
 ): Promise<AgentResponse> {
   setActiveUser(userId);
 
-  // Handle unknown intent
+  // Handle unknown intent — use LLM for conversational response
   if (decision.agent === ('coordinator' as AgentName) && decision.intent === 'unknown') {
-    return {
-      success: true,
-      message: "I'm not sure how to help with that. I can help with:\n• Wallet balances & transfers\n• Token prices & portfolio analysis\n• Swaps via Velora DEX\n• Aave V3 lending (supply/withdraw)\n• Risk limits & settings\n\nTry: \"What's my balance?\" or \"Swap 10 USDT for ETH\"",
-    };
+    const originalMessage = decision.params.message as string | undefined;
+    const context = getContextSummary(userId);
+    const systemPrompt = `You are Nexus, an autonomous DeFi treasury agent on Arbitrum. You help users manage crypto portfolios, execute trades, interact with Aave lending, bridge USDT cross-chain, and monitor risk.
+
+Capabilities:
+- Wallet: check balances, get wallet address, send ETH/tokens, estimate fees
+- Market: token prices (ETH, USDT, XAUT, etc.), portfolio summary, market conditions
+- Swaps: token swaps via Velora DEX (e.g. "swap 10 USDT for ETH")
+- Lending: Aave V3 supply, withdraw, borrow, repay, check health factor
+- Risk: transaction risk scoring, spending limits, NexusGuard parameters
+- Bridge: cross-chain USDT bridging via USDT0
+
+Answer the user's question helpfully and concisely. If they ask what you can do, explain your capabilities naturally. Keep responses under 200 words.`;
+
+    const userContent = context
+      ? `Previous conversation:\n${context}\n\nUser: ${originalMessage ?? ''}`
+      : (originalMessage ?? '');
+
+    try {
+      const reply = await llmComplete([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ]);
+      return { success: true, message: reply };
+    } catch {
+      return {
+        success: true,
+        message: "I can help with wallet balances, token prices, swaps via Velora DEX, Aave lending, and cross-chain USDT bridging. Try: \"What's my ETH balance?\" or \"Swap 10 USDT for ETH\"",
+      };
+    }
   }
 
   // Permission manifest check

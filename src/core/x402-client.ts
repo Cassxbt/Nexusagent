@@ -2,6 +2,7 @@ import { getAccount } from './wdk-setup.js';
 import { resolveTokenAddress, parseAmount } from './tokens.js';
 import { logReasoning } from '../reasoning/logger.js';
 import { getDb } from './db.js';
+import { riskAgent } from '../agents/risk.js';
 
 /** Maximum autonomous micropayment in USD — anything above requires user confirmation */
 const MAX_AUTONOMOUS_PAYMENT_USD = 2.0;
@@ -22,6 +23,71 @@ const TRUSTED_RECIPIENTS = new Set<string>(
 );
 
 const AUTONOMOUS_PAYMENT_TOKENS = new Set<string>(['USDT']);
+
+interface X402PaymentRequirements {
+  token: string;
+  amount: string;
+  recipient: string;
+  chain: string;
+  description?: string;
+}
+
+export function validateX402AutonomousPayment(
+  requirements: X402PaymentRequirements,
+  policy: {
+    trustedRecipients: Set<string>;
+    maxAutonomousPaymentUsd?: number;
+    maxDailyOpsBudgetUsd?: number;
+    spentTodayUsd?: number;
+  },
+): {
+  normalizedToken: string;
+  normalizedRecipient: string;
+  requestedAmount: number;
+  projectedSpend: number;
+} {
+  const requestedAmount = parseFloat(requirements.amount);
+  if (isNaN(requestedAmount) || requestedAmount <= 0) {
+    throw new Error(`x402: Invalid payment amount "${requirements.amount}"`);
+  }
+
+  const maxAutonomousPaymentUsd = policy.maxAutonomousPaymentUsd ?? MAX_AUTONOMOUS_PAYMENT_USD;
+  if (requestedAmount > maxAutonomousPaymentUsd) {
+    throw new Error(
+      `x402: Payment $${requestedAmount} exceeds autonomous cap of $${maxAutonomousPaymentUsd} — requires user approval`,
+    );
+  }
+
+  const normalizedToken = requirements.token.toUpperCase();
+  if (!AUTONOMOUS_PAYMENT_TOKENS.has(normalizedToken)) {
+    throw new Error(`x402: Autonomous payments only support ${Array.from(AUTONOMOUS_PAYMENT_TOKENS).join(', ')}`);
+  }
+
+  if (policy.trustedRecipients.size === 0) {
+    throw new Error('x402: Trusted recipient list is empty — autonomous payments are disabled until recipients are explicitly configured');
+  }
+
+  const normalizedRecipient = requirements.recipient.toLowerCase();
+  if (!policy.trustedRecipients.has(normalizedRecipient)) {
+    throw new Error(`x402: Untrusted payment recipient ${requirements.recipient.slice(0, 10)}...`);
+  }
+
+  const spentToday = policy.spentTodayUsd ?? 0;
+  const projectedSpend = spentToday + requestedAmount;
+  const maxDailyOpsBudgetUsd = policy.maxDailyOpsBudgetUsd ?? MAX_DAILY_OPS_BUDGET_USD;
+  if (projectedSpend > maxDailyOpsBudgetUsd) {
+    throw new Error(
+      `x402: Daily ops budget exceeded — spent $${spentToday.toFixed(2)} today, requested $${requestedAmount.toFixed(2)}, cap is $${maxDailyOpsBudgetUsd.toFixed(2)}`,
+    );
+  }
+
+  return {
+    normalizedToken,
+    normalizedRecipient,
+    requestedAmount,
+    projectedSpend,
+  };
+}
 
 function getStartOfUtcDay(): number {
   const now = new Date();
@@ -70,13 +136,7 @@ export async function x402Fetch(
 
   if (res.status !== 402) return res;
 
-  let requirements: {
-    token: string;
-    amount: string;
-    recipient: string;
-    chain: string;
-    description?: string;
-  };
+  let requirements: X402PaymentRequirements;
 
   try {
     const body = await res.json() as Record<string, unknown>;
@@ -88,47 +148,31 @@ export async function x402Fetch(
     throw new Error('x402: Could not parse payment requirements from 402 response');
   }
 
-  // Safety: validate payment amount
-  const requestedAmount = parseFloat(requirements.amount);
-  if (isNaN(requestedAmount) || requestedAmount <= 0) {
-    throw new Error(`x402: Invalid payment amount "${requirements.amount}"`);
-  }
-  if (requestedAmount > MAX_AUTONOMOUS_PAYMENT_USD) {
-    throw new Error(
-      `x402: Payment $${requestedAmount} exceeds autonomous cap of $${MAX_AUTONOMOUS_PAYMENT_USD} — requires user approval`,
-    );
-  }
-
-  const normalizedToken = requirements.token.toUpperCase();
-  if (!AUTONOMOUS_PAYMENT_TOKENS.has(normalizedToken)) {
-    throw new Error(`x402: Autonomous payments only support ${Array.from(AUTONOMOUS_PAYMENT_TOKENS).join(', ')}`);
-  }
-
   const spentToday = getTodaysX402SpendUsd(userId);
-  const projectedSpend = spentToday + requestedAmount;
-  if (projectedSpend > MAX_DAILY_OPS_BUDGET_USD) {
-    logReasoning({
-      agent: 'x402-Client',
-      action: 'budget-rejected',
-      reasoning: `Projected x402 ops spend $${projectedSpend.toFixed(2)} exceeds daily budget $${MAX_DAILY_OPS_BUDGET_USD.toFixed(2)}`,
-      status: 'fail',
+  let validated;
+  try {
+    validated = validateX402AutonomousPayment(requirements, {
+      trustedRecipients: TRUSTED_RECIPIENTS,
+      maxAutonomousPaymentUsd: MAX_AUTONOMOUS_PAYMENT_USD,
+      maxDailyOpsBudgetUsd: MAX_DAILY_OPS_BUDGET_USD,
+      spentTodayUsd: spentToday,
     });
-    throw new Error(
-      `x402: Daily ops budget exceeded — spent $${spentToday.toFixed(2)} today, requested $${requestedAmount.toFixed(2)}, cap is $${MAX_DAILY_OPS_BUDGET_USD.toFixed(2)}`,
-    );
-  }
-
-  // Safety: validate recipient
-  const normalizedRecipient = requirements.recipient.toLowerCase();
-  if (TRUSTED_RECIPIENTS.size > 0 && !TRUSTED_RECIPIENTS.has(normalizedRecipient)) {
+  } catch (err) {
     logReasoning({
       agent: 'x402-Client',
       action: 'payment-rejected',
-      reasoning: `Recipient ${requirements.recipient.slice(0, 10)}... is not in trusted list`,
+      reasoning: err instanceof Error ? err.message : String(err),
       status: 'fail',
     });
-    throw new Error(`x402: Untrusted payment recipient ${requirements.recipient.slice(0, 10)}...`);
+    throw err;
   }
+
+  const {
+    normalizedToken,
+    normalizedRecipient,
+    requestedAmount,
+    projectedSpend,
+  } = validated;
 
   logReasoning({
     agent: 'x402-Client',
@@ -137,6 +181,24 @@ export async function x402Fetch(
     result: `Daily budget after payment: $${(MAX_DAILY_OPS_BUDGET_USD - projectedSpend).toFixed(2)} remaining`,
     status: 'pass',
   });
+
+  const riskResult = await riskAgent.execute({
+    intent: 'check_transaction',
+    params: {
+      amountUsdt: requestedAmount.toFixed(2),
+      type: 'x402_payment',
+      token: normalizedToken,
+      slippage: '0',
+      tokenIn: '',
+      tokenOut: '',
+      contractAddress: '',
+      systemActor: 'x402',
+    },
+    userId,
+  });
+  if (!riskResult.success || !(riskResult.data as Record<string, unknown>)?.approved) {
+    throw new Error(riskResult.message);
+  }
 
   const chain = requirements.chain || 'ethereum';
   const account = await getAccount(chain, { userId });
@@ -174,10 +236,20 @@ export async function x402Fetch(
       dailyBudgetUsd: MAX_DAILY_OPS_BUDGET_USD,
       spentTodayUsd: spentToday,
       projectedSpendUsd: projectedSpend,
+      risk: {
+        score: riskResult.riskScore,
+        tier: riskResult.riskTier,
+      },
     }));
   } catch {
     // Non-fatal — logging failure shouldn't block the payment flow
   }
+
+  await riskAgent.execute({
+    intent: 'record_spending',
+    params: { amountUsdt: requestedAmount.toFixed(2) },
+    userId,
+  });
 
   const retryRes = await fetch(url, {
     ...options,

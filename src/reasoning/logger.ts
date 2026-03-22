@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 export type RiskTier = 'APPROVE' | 'REVIEW' | 'BLOCK';
 
 export interface ReasoningStep {
@@ -11,21 +13,29 @@ export interface ReasoningStep {
   timestamp: number;
 }
 
-// Per-user reasoning logs — no more global state leak
 const userLogs = new Map<string, ReasoningStep[]>();
-let activeUserId = '__global__';
+const reasoningUserContext = new AsyncLocalStorage<string>();
+const GLOBAL_REASONING_USER = '__global__';
 
-export function setActiveUser(userId: string): void {
-  activeUserId = userId;
+function getScopedUserId(userId?: string): string {
+  return userId ?? reasoningUserContext.getStore() ?? GLOBAL_REASONING_USER;
 }
 
-export function logReasoning(step: Omit<ReasoningStep, 'timestamp'>): void {
-  const entry: ReasoningStep = { ...step, timestamp: Date.now() };
+export function setActiveUser(userId: string): void {
+  reasoningUserContext.enterWith(userId || GLOBAL_REASONING_USER);
+}
 
-  if (!userLogs.has(activeUserId)) {
-    userLogs.set(activeUserId, []);
+export function logReasoning(
+  step: Omit<ReasoningStep, 'timestamp'>,
+  options?: { userId?: string },
+): void {
+  const entry: ReasoningStep = { ...step, timestamp: Date.now() };
+  const userId = getScopedUserId(options?.userId);
+
+  if (!userLogs.has(userId)) {
+    userLogs.set(userId, []);
   }
-  userLogs.get(activeUserId)!.push(entry);
+  userLogs.get(userId)!.push(entry);
 
   const statusIcon = entry.status === 'pass' ? '✓' : entry.status === 'fail' ? '✗' : entry.status === 'warn' ? '⚠' : '→';
   console.log(`[${entry.agent}] ${statusIcon} ${entry.action}: ${entry.reasoning}`);
@@ -33,12 +43,12 @@ export function logReasoning(step: Omit<ReasoningStep, 'timestamp'>): void {
 }
 
 export function getReasoningLog(userId?: string): ReasoningStep[] {
-  const id = userId ?? activeUserId;
+  const id = getScopedUserId(userId);
   return [...(userLogs.get(id) ?? [])];
 }
 
 export function clearReasoningLog(userId?: string): void {
-  const id = userId ?? activeUserId;
+  const id = getScopedUserId(userId);
   userLogs.delete(id);
 }
 

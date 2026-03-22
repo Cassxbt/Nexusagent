@@ -20,7 +20,7 @@ import {
 } from '../reasoning/logger.js';
 import { addMessage, clearHistory } from '../reasoning/memory.js';
 import { addEventSubscriber, getEventBuffer, type StampedEvent } from '../core/events.js';
-import type { RouteDecision } from '../agents/types.js';
+import type { ExecutionReceiptContext, RouteDecision } from '../agents/types.js';
 import { getUserAccountContext } from '../core/account-context.js';
 import {
   createAuthChallenge,
@@ -30,6 +30,11 @@ import {
   type WebSession,
 } from './auth.js';
 import { readServiceHeartbeat } from '../core/heartbeat.js';
+import {
+  canAccessSensitiveRoute,
+  resolveRestUserId,
+  resolveSocketUserId,
+} from './access.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +88,7 @@ const READ_ONLY_INTENTS = new Set([
   'assess_risk',
   'get_guard_params',
   'quote_bridge',
+  'unknown',
 ]);
 
 function send(ws: WebSocket, data: WsOutbound): void {
@@ -109,6 +115,13 @@ function getSessionToken(req: import('express').Request): string | null {
   const headerToken = typeof req.headers['x-session-token'] === 'string' ? req.headers['x-session-token'] : '';
   const queryToken = typeof req.query.session === 'string' ? req.query.session : '';
   return bearer || headerToken || queryToken || null;
+}
+
+function hasValidApiToken(req: import('express').Request, expectedToken: string): boolean {
+  if (!expectedToken) return false;
+  const bearer = req.headers.authorization?.replace('Bearer ', '').trim();
+  const query = typeof req.query.token === 'string' ? req.query.token : '';
+  return bearer === expectedToken || query === expectedToken;
 }
 
 function requireWebSession(
@@ -201,6 +214,7 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
 
   const account = await getAccount('ethereum', { userId });
   const wallet = await getWalletData(userId);
+  const accountContext = getUserAccountContext(userId, 'ethereum');
   const ethRaw = await account.getBalance();
   const wethAddr = resolveTokenAddress('WETH', 'ethereum');
   const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
@@ -240,6 +254,11 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
   const yieldPct = totalUsdValue > 0 ? (aaveCollateralUsd / totalUsdValue) * 100 : 0;
 
   const policy = getOrCreateTreasuryPolicy(userId);
+  const autopilotRunning = isAutopilotRunning();
+  const heartbeat = readServiceHeartbeat({
+    autopilotRunning,
+    expectedCycleMs: 5 * 60 * 1000,
+  });
   const db = getDb();
   const txRows = db.prepare(`
     SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
@@ -256,6 +275,7 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     } catch {
       parsedMetadata = null;
     }
+    const receiptContext = (parsedMetadata?.receiptContext ?? null) as ExecutionReceiptContext | null;
     return {
       intent: tx.intent,
       agent: tx.agent,
@@ -263,8 +283,12 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
       txHash: tx.tx_hash,
       status: tx.status,
       createdAt: tx.created_at,
-      receiptContext: parsedMetadata?.receiptContext ?? null,
+      receiptContext,
       risk: parsedMetadata?.risk ?? null,
+      summary: receiptContext?.summary ?? null,
+      policyReason: receiptContext?.reason ?? null,
+      policyName: receiptContext?.policy ?? null,
+      signalSnapshot: receiptContext?.signals ?? null,
     };
   });
 
@@ -293,7 +317,26 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     view,
     userId,
     wallet,
-    autopilot: { running: isAutopilotRunning() },
+    autopilot: {
+      running: autopilotRunning,
+      status: heartbeat.status,
+      ...heartbeat.autopilot,
+    },
+    execution: {
+      ownerAddress: accountContext?.ownerAddress ?? null,
+      strategyAddress: wallet.address,
+      model: view === 'demo'
+        ? 'Read-only demo treasury'
+        : accountContext?.ownerAddress
+          ? 'Wallet-authenticated identity + Nexus-managed WDK strategy account'
+          : 'Nexus-managed WDK strategy account',
+      limitation: view === 'demo'
+        ? 'Demo mode is inspect-only.'
+        : accountContext?.ownerAddress
+          ? 'The connected wallet authenticates the user. Execution currently runs from the mapped WDK strategy account.'
+          : 'Execution is currently strategy-account based.',
+    },
+    heartbeat,
     balances: {
       eth,
       weth,
@@ -312,6 +355,7 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     policy,
     receipts,
     x402Payments: x402Rows,
+    sourceHealth: heartbeat.sources,
     reasoning: getReasoningLog(userId),
   };
 }
@@ -552,11 +596,9 @@ export function createWebServer(port = 3000): void {
   app.post('/api/chat', express.json(), async (req, res) => {
     const sessionToken = getSessionToken(req);
     const session = sessionToken ? getWebSession(sessionToken) : null;
-    const hasApiToken = Boolean(webToken);
+    const hasApiToken = hasValidApiToken(req, webToken);
     if (webToken) {
-      const bearer = req.headers.authorization?.replace('Bearer ', '');
-      const query = (req.query as Record<string, string>).token;
-      if (bearer !== webToken && query !== webToken) {
+      if (!hasApiToken) {
         res.status(401).json({ success: false, error: 'Unauthorized — provide token via Authorization: Bearer <token> or ?token=<token>' });
         return;
       }
@@ -566,7 +608,11 @@ export function createWebServer(port = 3000): void {
       res.status(400).json({ success: false, error: 'message required' });
       return;
     }
-    const uid = session?.userId ?? reqUserId?.trim() ?? `api-${Date.now()}`;
+    const uid = resolveRestUserId({
+      sessionUserId: session?.userId,
+      requestedUserId: reqUserId,
+      hasApiToken,
+    });
     setActiveUser(uid);
     clearReasoningLog(uid);
     addMessage(uid, 'user', message.trim());
@@ -627,10 +673,10 @@ export function createWebServer(port = 3000): void {
   // Explicit confirmation endpoint for REST clients
   // POST /api/chat/confirm { "confirm_token": "<random token from requires_confirmation response>" }
   app.post('/api/chat/confirm', express.json(), async (req, res) => {
+    const session = getSessionToken(req) ? getWebSession(getSessionToken(req)!) : null;
+    const hasApiToken = hasValidApiToken(req, webToken);
     if (webToken) {
-      const bearer = req.headers.authorization?.replace('Bearer ', '');
-      const query = (req.query as Record<string, string>).token;
-      if (bearer !== webToken && query !== webToken) {
+      if (!hasApiToken && !session) {
         res.status(401).json({ success: false, error: 'Unauthorized' });
         return;
       }
@@ -648,6 +694,10 @@ export function createWebServer(port = 3000): void {
     const pending = pendingActions.get(resolved.userId);
     if (!pending) {
       res.status(404).json({ success: false, error: 'No pending action for this token — it may have expired or already been executed' });
+      return;
+    }
+    if (session && session.userId !== resolved.userId) {
+      res.status(403).json({ success: false, error: 'confirm_token does not belong to this session' });
       return;
     }
     clearPendingAction(resolved.userId);
@@ -846,15 +896,30 @@ export function createWebServer(port = 3000): void {
   });
 
   // Transaction audit log — shows autonomous agent activity
-  app.get('/api/tx-log', (_req, res) => {
+  app.get('/api/tx-log', (req, res) => {
     try {
+      const session = getSessionToken(req) ? getWebSession(getSessionToken(req)!) : null;
+      const hasApiToken = hasValidApiToken(req, webToken);
+      if (!canAccessSensitiveRoute({ hasSession: Boolean(session), hasApiToken })) {
+        res.status(401).json({ success: false, error: 'session or api token required' });
+        return;
+      }
+
       const db = getDb();
-      const rows = db.prepare(`
-        SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
-        FROM tx_log
-        ORDER BY created_at DESC
-        LIMIT 50
-      `).all();
+      const rows = session
+        ? db.prepare(`
+            SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
+            FROM tx_log
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 50
+          `).all(session.userId)
+        : db.prepare(`
+            SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
+            FROM tx_log
+            ORDER BY created_at DESC
+            LIMIT 50
+          `).all();
       res.json({ success: true, count: rows.length, transactions: rows });
     } catch (err) {
       res.status(500).json({ success: false, error: String(err) });
@@ -944,10 +1009,8 @@ export function createWebServer(port = 3000): void {
     }
   }
 
-  // Register autopilot → WebSocket broadcast (one-time, after server starts)
-  import('../agents/autopilot.js').then(({ addBroadcastChannel }) => {
-    addBroadcastChannel(broadcastToAll);
-  }).catch(() => {});
+  // Autopilot typed events are relayed to WS/SSE clients via addEventSubscriber below.
+  // broadcastToAll is intentionally NOT registered — it sends Telegram-formatted text.
 
   // Global event relay: autopilot typed events → WS clients and SSE clients
   addEventSubscriber((event) => {
@@ -990,13 +1053,11 @@ export function createWebServer(port = 3000): void {
   // Demo scenario endpoint — forces specific conditions for judge demos
   // POST /api/demo { "scenario": "guard_block" | "force_cycle" | "inject_apy_drop" }
   app.post('/api/demo', express.json(), async (req, res) => {
-    if (webToken) {
-      const bearer = req.headers.authorization?.replace('Bearer ', '');
-      const query = (req.query as Record<string, string>).token;
-      if (bearer !== webToken && query !== webToken) {
-        res.status(401).json({ error: 'Unauthorized' });
-        return;
-      }
+    const session = getSessionToken(req) ? getWebSession(getSessionToken(req)!) : null;
+    const hasApiToken = hasValidApiToken(req, webToken);
+    if (!canAccessSensitiveRoute({ hasSession: Boolean(session), hasApiToken })) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
     }
 
     const { scenario } = req.body as { scenario?: string };
@@ -1033,10 +1094,11 @@ export function createWebServer(port = 3000): void {
 
     const sessionToken = url.searchParams.get('session');
     const session = sessionToken ? getWebSession(sessionToken) : null;
-    const guestUserId = url.searchParams.get('guest');
-    const userId = session?.userId ?? guestUserId ?? `web-${Date.now()}`;
+    const userId = resolveSocketUserId(session?.userId);
 
-    const wallet = await getWalletData(userId);
+    const wallet = session
+      ? await getWalletData(userId)
+      : { address: 'demo-read-only', chainName: 'Arbitrum One', mode: 'READ-ONLY' };
     send(ws, { type: 'wallet', wallet });
 
     // Replay event history so judges see the full autopilot decision trail
@@ -1060,12 +1122,14 @@ export function createWebServer(port = 3000): void {
       }
 
       if (msg.type === 'wallet_refresh') {
-        const updated = await getWalletData(msg.userId ?? userId);
+        const updated = session
+          ? await getWalletData(userId)
+          : { address: 'demo-read-only', chainName: 'Arbitrum One', mode: 'READ-ONLY' };
         send(ws, { type: 'wallet', wallet: updated });
         return;
       }
 
-      const uid = session?.userId ?? msg.userId ?? userId;
+      const uid = session?.userId ?? userId;
 
       if (msg.type === 'confirm') {
         const pending = pendingActions.get(uid);

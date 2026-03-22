@@ -1,4 +1,5 @@
 import type Usdt0ProtocolEvm from '@tetherto/wdk-protocol-bridge-usdt0-evm';
+import { getAddress, isAddress } from 'ethers';
 import { getAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, parseAmount, fromBaseUnits } from '../core/tokens.js';
 import { logReasoning } from '../reasoning/logger.js';
@@ -7,6 +8,7 @@ import type { Agent, AgentRequest, AgentResponse } from './types.js';
 // USDT0 supports bridging USDT across EVM chains
 const SUPPORTED_TOKENS = ['USDT'];
 const SUPPORTED_TARGET_CHAINS = ['ethereum', 'base', 'polygon', 'optimism'];
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export const bridgeAgent: Agent = {
   name: 'bridge',
@@ -59,7 +61,7 @@ async function quoteBridge(
 
     const quote = await bridge.quoteBridge({
       targetChain,
-      recipient,
+      recipient: validation.recipient,
       token: validation.tokenAddress,
       amount: validation.baseAmount,
     });
@@ -71,11 +73,11 @@ async function quoteBridge(
       success: true,
       message: [
         `Bridge Quote: ${amount} ${token} → ${targetChain}`,
-        `Recipient: \`${recipient.slice(0, 10)}...${recipient.slice(-8)}\``,
+        `Recipient: \`${validation.recipient.slice(0, 10)}...${validation.recipient.slice(-8)}\``,
         `Gas fee: ${fee} ETH`,
         `Bridge fee: ${bridgeFee} ETH`,
       ].join('\n'),
-      data: { token, amount, targetChain, fee: String(quote.fee), bridgeFee: String(quote.bridgeFee) },
+      data: { token, amount, targetChain, recipient: validation.recipient, fee: String(quote.fee), bridgeFee: String(quote.bridgeFee) },
     };
   } catch (err) {
     return { success: false, message: `Bridge quote failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -111,7 +113,7 @@ async function executeBridge(
     const bridge = getBridge(account);
     const result = await bridge.bridge({
       targetChain,
-      recipient,
+      recipient: validation.recipient,
       token: validation.tokenAddress,
       amount: validation.baseAmount,
     });
@@ -128,11 +130,11 @@ async function executeBridge(
       success: true,
       message: [
         `Bridging ${amount} ${token} → ${targetChain}`,
-        `Recipient: \`${recipient}\``,
+        `Recipient: \`${validation.recipient}\``,
         `Tx: \`${result.hash}\``,
         result.approveHash ? `Approve Tx: \`${result.approveHash}\`` : '',
       ].filter(Boolean).join('\n'),
-      data: { hash: result.hash, approveHash: result.approveHash, token, amount, targetChain, recipient },
+      data: { hash: result.hash, approveHash: result.approveHash, token, amount, targetChain, recipient: validation.recipient },
     };
   } catch (err) {
     return { success: false, message: `Bridge failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -140,8 +142,22 @@ async function executeBridge(
 }
 
 type ValidationResult =
-  | { ok: true; tokenAddress: string; baseAmount: bigint }
+  | { ok: true; tokenAddress: string; baseAmount: bigint; recipient: string }
   | { ok: false; error: string };
+
+export function normalizeBridgeRecipient(recipient: string): string {
+  const trimmed = recipient.trim();
+  if (!isAddress(trimmed)) {
+    throw new Error('Invalid bridge recipient address');
+  }
+
+  const normalized = getAddress(trimmed);
+  if (normalized.toLowerCase() === ZERO_ADDRESS) {
+    throw new Error('Bridge recipient cannot be the zero address');
+  }
+
+  return normalized;
+}
 
 function validate(token: string, amount: string, targetChain: string, recipient: string, chain: string): ValidationResult {
   if (!token || !amount || !targetChain || !recipient) {
@@ -162,5 +178,12 @@ function validate(token: string, amount: string, targetChain: string, recipient:
   const baseAmount = parseAmount(amount, token, chain);
   if (baseAmount === null) return { ok: false, error: `Invalid amount: ${amount}` };
 
-  return { ok: true, tokenAddress, baseAmount };
+  let normalizedRecipient: string;
+  try {
+    normalizedRecipient = normalizeBridgeRecipient(recipient);
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Invalid bridge recipient address' };
+  }
+
+  return { ok: true, tokenAddress, baseAmount, recipient: normalizedRecipient };
 }
