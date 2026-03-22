@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+cache/
+.env
+*.log
+.DS_Store
+
+# Database files — contain live tx history and user state
+.nexus.db
+.nexus.db-wal
+.nexus.db-shm
+.nexus-risk-state.json
+.nexus-test.db
+
+# Local-only markdown files
+*.md

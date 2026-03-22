@@ -1,0 +1,45 @@
+{
+  "name": "nexus",
+  "version": "0.1.0",
+  "description": "Autonomous treasury agent on Arbitrum powered by Tether WDK",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@tetherto/wdk": "^1.0.0-beta.6",
+    "@tetherto/wdk-pricing-bitfinex-http": "^1.0.0-beta.1",
+    "@tetherto/wdk-protocol-bridge-usdt0-evm": "^1.0.0-beta.2",
+    "@tetherto/wdk-protocol-lending-aave-evm": "^1.0.0-beta.3",
+    "@tetherto/wdk-protocol-swap-velora-evm": "^1.0.0-beta.4",
+    "@tetherto/wdk-wallet-evm": "^1.0.0-beta.8",
+    "@tetherto/wdk-wallet-evm-erc-4337": "^1.0.0-beta.5",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "@types/ws": "^8.18.1",
+    "better-sqlite3": "^12.8.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "grammy": "^1.41.1",
+    "openai": "^6.29.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}

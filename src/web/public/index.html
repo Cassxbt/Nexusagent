@@ -1,0 +1,1842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus — Autonomous Treasury Agent</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0c0f;
+    --bg2: #0f1318;
+    --bg3: #151a22;
+    --border: #1e2530;
+    --border2: #263040;
+    --text: #c9d1d9;
+    --text2: #8b949e;
+    --text3: #4a5568;
+    --green: #3fb950;
+    --green2: #238636;
+    --tether: #009393;
+    --tether2: #00b8b8;
+    --red: #f85149;
+    --yellow: #d29922;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+    --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    overflow: hidden;
+  }
+
+  #app {
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    grid-template-columns: 240px 1fr 300px;
+    height: 100vh;
+    gap: 0;
+  }
+
+  /* ── Header ── */
+  #header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    gap: 16px;
+  }
+
+  #header .logo {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--tether2);
+    letter-spacing: 0.08em;
+  }
+
+  #header .logo span {
+    color: var(--text2);
+    font-weight: 400;
+    font-size: 12px;
+    margin-left: 8px;
+    letter-spacing: 0;
+  }
+
+  #header .agents {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+    margin-left: 8px;
+  }
+
+  .agent-badge {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    letter-spacing: 0.04em;
+  }
+
+  .agent-badge.active {
+    border-color: var(--tether);
+    color: var(--tether2);
+  }
+
+  #ws-status {
+    font-size: 11px;
+    color: var(--text3);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  #ws-status .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--text3);
+  }
+
+  #ws-status.connected .dot { background: var(--green); }
+  #ws-status.connected { color: var(--text2); }
+
+  /* ── Left sidebar: wallet ── */
+  #sidebar {
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .section-label {
+    font-size: 10px;
+    color: var(--text3);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .wallet-card {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    padding: 12px;
+  }
+
+  .auth-status {
+    font-size: 11px;
+    color: var(--text2);
+    line-height: 1.6;
+    margin-bottom: 10px;
+  }
+
+  .auth-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+
+  .btn-secondary {
+    background: var(--bg);
+    color: var(--text2);
+    border: 1px solid var(--border2);
+  }
+
+  .btn-secondary:hover {
+    border-color: var(--tether);
+    color: var(--text);
+  }
+
+  .wallet-address {
+    font-size: 11px;
+    color: var(--tether2);
+    word-break: break-all;
+    margin-bottom: 6px;
+  }
+
+  .wallet-meta {
+    font-size: 10px;
+    color: var(--text3);
+    display: flex;
+    gap: 8px;
+  }
+
+  .wallet-meta .badge {
+    padding: 1px 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .cmd-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cmd-item {
+    font-size: 11px;
+    color: var(--text2);
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s;
+    border: 1px solid transparent;
+  }
+
+  .cmd-item:hover {
+    background: var(--bg3);
+    border-color: var(--border);
+  }
+
+  .cmd-item .cmd-key {
+    color: var(--tether2);
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: 6px;
+  }
+
+  .tip {
+    font-size: 10px;
+    color: var(--text3);
+    line-height: 1.6;
+  }
+
+  /* ── Chat panel ── */
+  #chat-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at top left, rgba(0, 184, 184, 0.10), transparent 28%),
+      radial-gradient(circle at top right, rgba(88, 166, 255, 0.08), transparent 24%),
+      linear-gradient(180deg, rgba(21, 26, 34, 0.95), rgba(10, 12, 15, 0.98));
+  }
+
+  #dashboard-shell {
+    padding: 18px 24px 14px;
+    border-bottom: 1px solid var(--border);
+    background:
+      linear-gradient(180deg, rgba(15, 19, 24, 0.95), rgba(15, 19, 24, 0.82)),
+      radial-gradient(circle at top left, rgba(0, 147, 147, 0.12), transparent 30%);
+  }
+
+  .hero-strip {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+
+  .hero-eyebrow {
+    color: var(--tether2);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-size: 10px;
+    margin-bottom: 6px;
+  }
+
+  .hero-title {
+    font-size: 22px;
+    line-height: 1.1;
+    color: #f2fffe;
+    letter-spacing: -0.03em;
+    margin-bottom: 6px;
+  }
+
+  .hero-subtitle {
+    font-size: 12px;
+    color: var(--text2);
+    max-width: 620px;
+    line-height: 1.6;
+  }
+
+  .hero-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .panel {
+    background: linear-gradient(180deg, rgba(21, 26, 34, 0.95), rgba(10, 12, 15, 0.95));
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 14px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+  }
+
+  .panel.stat { grid-column: span 2; min-height: 116px; }
+  .panel.wide { grid-column: span 4; min-height: 176px; }
+
+  .panel-label {
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: 10px;
+  }
+
+  .stat-value {
+    font-size: 24px;
+    color: #f2fffe;
+    letter-spacing: -0.04em;
+    margin-bottom: 6px;
+  }
+
+  .stat-sub {
+    font-size: 11px;
+    color: var(--text2);
+    line-height: 1.5;
+  }
+
+  .status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid var(--border2);
+  }
+
+  .status-chip.risk-on { color: var(--green); border-color: #1f6c2e; background: rgba(63, 185, 80, 0.08); }
+  .status-chip.risk-off { color: var(--yellow); border-color: #6f5314; background: rgba(210, 153, 34, 0.08); }
+  .status-chip.neutral { color: var(--blue); border-color: #2a4a78; background: rgba(88, 166, 255, 0.08); }
+  .status-chip.running { color: var(--tether2); border-color: rgba(0, 184, 184, 0.4); background: rgba(0, 184, 184, 0.08); }
+  .status-chip.paused { color: var(--red); border-color: rgba(248, 81, 73, 0.3); background: rgba(248, 81, 73, 0.08); }
+
+  .allocation-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  .allocation-segment {
+    border-radius: 8px;
+    padding: 10px 10px 8px;
+    border: 1px solid var(--border2);
+    background: rgba(10, 12, 15, 0.55);
+  }
+
+  .allocation-segment strong {
+    display: block;
+    font-size: 16px;
+    color: #f2fffe;
+    margin-top: 4px;
+  }
+
+  .allocation-segment span {
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .mini-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .policy-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .policy-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .policy-field.full {
+    grid-column: 1 / -1;
+  }
+
+  .policy-field label {
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+
+  .policy-field input,
+  .policy-field select {
+    width: 100%;
+    background: rgba(10, 12, 15, 0.8);
+    border: 1px solid var(--border2);
+    border-radius: 7px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 9px 10px;
+    outline: none;
+  }
+
+  .policy-field input:focus,
+  .policy-field select:focus {
+    border-color: var(--tether);
+  }
+
+  .policy-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .policy-status {
+    font-size: 11px;
+    color: var(--text3);
+    min-height: 16px;
+  }
+
+  .mini-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text2);
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(38, 48, 64, 0.5);
+  }
+
+  .mini-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .receipt-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(38, 48, 64, 0.5);
+  }
+
+  .receipt-row:last-child { border-bottom: none; }
+
+  .receipt-title {
+    font-size: 12px;
+    color: #effdfa;
+    margin-bottom: 3px;
+  }
+
+  .receipt-meta, .receipt-side {
+    font-size: 10px;
+    color: var(--text3);
+    line-height: 1.6;
+  }
+
+  .receipt-side {
+    text-align: right;
+    min-width: 96px;
+  }
+
+  .muted-empty {
+    color: var(--text3);
+    font-size: 11px;
+    line-height: 1.6;
+  }
+
+  @media (max-width: 1200px) {
+    .panel.stat { grid-column: span 4; }
+    .panel.wide { grid-column: span 6; }
+  }
+
+  @media (max-width: 900px) {
+    #app {
+      grid-template-columns: 1fr;
+      grid-template-rows: 44px auto auto 280px;
+    }
+
+    #sidebar, #reasoning-panel {
+      border: none;
+      border-top: 1px solid var(--border);
+    }
+
+    .dashboard-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .panel.stat, .panel.wide { grid-column: span 1; }
+    .policy-form { grid-template-columns: 1fr; }
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    scroll-behavior: smooth;
+  }
+
+  #messages::-webkit-scrollbar { width: 4px; }
+  #messages::-webkit-scrollbar-track { background: transparent; }
+  #messages::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .msg {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 85%;
+    animation: fadeIn 0.15s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg.user { align-self: flex-end; }
+  .msg.assistant { align-self: flex-start; }
+  .msg.error { align-self: flex-start; }
+
+  .msg-meta {
+    font-size: 10px;
+    color: var(--text3);
+    padding: 0 2px;
+  }
+
+  .msg.user .msg-meta { text-align: right; }
+
+  .msg-bubble {
+    padding: 10px 14px;
+    border-radius: 8px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .msg.user .msg-bubble {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text);
+  }
+
+  .msg.assistant .msg-bubble {
+    background: #0d1f0d;
+    border: 1px solid #1a3a1a;
+    color: var(--text);
+  }
+
+  .msg.error .msg-bubble {
+    background: #1a0d0d;
+    border: 1px solid #3a1a1a;
+    color: var(--red);
+  }
+
+  .msg.confirm .msg-bubble {
+    background: #141020;
+    border: 1px solid #2a2050;
+    color: var(--text);
+  }
+
+  .risk-badge {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 8px;
+    border-radius: 10px;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+
+  .risk-badge.APPROVE { background: #0d2010; color: var(--green); border: 1px solid var(--green2); }
+  .risk-badge.REVIEW  { background: #1a1500; color: var(--yellow); border: 1px solid #5a4000; }
+  .risk-badge.BLOCK   { background: #1a0d0d; color: var(--red); border: 1px solid #5a1a1a; }
+
+  .confirm-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .btn {
+    padding: 6px 16px;
+    border-radius: 5px;
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.1s;
+  }
+
+  .btn-confirm {
+    background: var(--green2);
+    color: #fff;
+    border-color: var(--green);
+  }
+
+  .btn-confirm:hover { background: #2ea043; }
+
+  .btn-cancel {
+    background: transparent;
+    color: var(--text2);
+    border-color: var(--border2);
+  }
+
+  .btn-cancel:hover { background: var(--bg3); }
+
+  .typing-indicator {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: fit-content;
+    animation: fadeIn 0.15s ease;
+  }
+
+  .typing-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--tether);
+    animation: typingBounce 1.2s infinite;
+  }
+
+  .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes typingBounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  /* ── Input area ── */
+  #input-area {
+    padding: 12px 24px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+
+  #input-area .prompt-prefix {
+    color: var(--tether2);
+    font-size: 14px;
+    padding-bottom: 9px;
+    user-select: none;
+  }
+
+  #msg-input {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 12px;
+    resize: none;
+    outline: none;
+    min-height: 38px;
+    max-height: 140px;
+    line-height: 1.5;
+    transition: border-color 0.15s;
+  }
+
+  #msg-input:focus {
+    border-color: var(--tether);
+  }
+
+  #msg-input::placeholder { color: var(--text3); }
+
+  #send-btn {
+    background: var(--tether);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+
+  #send-btn:hover { background: var(--tether2); }
+  #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* ── Right panel: reasoning ── */
+  #reasoning-panel {
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #reasoning-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  #reasoning-header .title {
+    font-size: 11px;
+    color: var(--text2);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  #reasoning-clear {
+    font-size: 10px;
+    color: var(--text3);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    background: transparent;
+    font-family: var(--mono);
+  }
+
+  #reasoning-clear:hover {
+    border-color: var(--border2);
+    color: var(--text2);
+  }
+
+  #reasoning-log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  #reasoning-log::-webkit-scrollbar { width: 3px; }
+  #reasoning-log::-webkit-scrollbar-thumb { background: var(--border2); }
+
+  .r-step {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 8px 10px;
+    font-size: 11px;
+    animation: fadeIn 0.15s ease;
+    border-left: 2px solid var(--border);
+  }
+
+  .r-step.pass  { border-left-color: var(--green); }
+  .r-step.warn  { border-left-color: var(--yellow); }
+  .r-step.fail  { border-left-color: var(--red); }
+  .r-step.other { border-left-color: var(--tether); }
+
+  .r-agent {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .r-agent.pass  { color: var(--green); }
+  .r-agent.warn  { color: var(--yellow); }
+  .r-agent.fail  { color: var(--red); }
+  .r-agent.other { color: var(--tether2); }
+
+  .r-action {
+    color: var(--text2);
+    margin-left: 5px;
+    font-size: 10px;
+  }
+
+  .r-reasoning {
+    color: var(--text2);
+    margin-top: 3px;
+    line-height: 1.4;
+  }
+
+  .r-result {
+    color: var(--text3);
+    margin-top: 3px;
+    font-style: italic;
+  }
+
+  .r-risk {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 8px;
+    margin-left: 5px;
+    font-weight: 600;
+  }
+
+  .r-risk.APPROVE { background: #0d2010; color: var(--green); }
+  .r-risk.REVIEW  { background: #1a1500; color: var(--yellow); }
+  .r-risk.BLOCK   { background: #1a0d0d; color: var(--red); }
+
+  #reasoning-empty {
+    color: var(--text3);
+    font-size: 11px;
+    text-align: center;
+    padding-top: 20px;
+    line-height: 1.7;
+  }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header id="header">
+    <div class="logo">NEXUS <span>autonomous treasury agent</span></div>
+    <div class="agents">
+      <span class="agent-badge" id="badge-coordinator">coordinator</span>
+      <span class="agent-badge" id="badge-treasury">treasury</span>
+      <span class="agent-badge" id="badge-market">market</span>
+      <span class="agent-badge" id="badge-swap">swap</span>
+      <span class="agent-badge" id="badge-yield">yield</span>
+      <span class="agent-badge" id="badge-risk">risk</span>
+      <span class="agent-badge" id="badge-bridge">bridge</span>
+    </div>
+    <div id="ws-status">
+      <div class="dot"></div>
+      <span id="ws-status-text">connecting...</span>
+    </div>
+  </header>
+
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div>
+      <div class="section-label">session</div>
+      <div class="wallet-card">
+        <div class="auth-status" id="auth-status">Guest session</div>
+        <div class="wallet-address" id="auth-address">Not signed in</div>
+        <div class="auth-actions">
+          <button class="btn btn-secondary" id="connect-wallet-btn">Connect Wallet</button>
+          <button class="btn btn-cancel" id="logout-btn" style="display:none">Logout</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">wallet</div>
+      <div class="wallet-card">
+        <div class="wallet-address" id="wallet-address">connecting...</div>
+        <div class="wallet-meta">
+          <span class="badge" id="wallet-chain">Arbitrum One</span>
+          <span class="badge" id="wallet-mode">EOA</span>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">demo</div>
+      <div class="cmd-list">
+        <div class="cmd-item" onclick="loadDemoSnapshot()">
+          <span class="cmd-key">$</span>load demo snapshot
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">quick commands</div>
+      <div class="cmd-list">
+        <div class="cmd-item" onclick="sendCommand('What is my balance?')">
+          <span class="cmd-key">$</span>check balance
+        </div>
+        <div class="cmd-item" onclick="sendCommand('Show portfolio summary')">
+          <span class="cmd-key">$</span>portfolio
+        </div>
+        <div class="cmd-item" onclick="sendCommand('Get ETH price')">
+          <span class="cmd-key">$</span>eth price
+        </div>
+        <div class="cmd-item" onclick="sendCommand('Show market conditions')">
+          <span class="cmd-key">$</span>market conditions
+        </div>
+        <div class="cmd-item" onclick="sendCommand('What are my risk limits?')">
+          <span class="cmd-key">$</span>risk limits
+        </div>
+        <div class="cmd-item" onclick="sendCommand('Show Aave account data')">
+          <span class="cmd-key">$</span>aave positions
+        </div>
+        <div class="cmd-item" onclick="sendCommand('Get market conditions')">
+          <span class="cmd-key">$</span>market intel
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">hints</div>
+      <div class="tip">
+        Try natural language:<br>
+        "Swap 10 USDT for ETH"<br>
+        "Supply 50 USDT to Aave"<br>
+        "Send 5 USDT to 0x..."<br>
+        "What's the ETH/USDT price?"<br><br>
+        Type <strong style="color:var(--tether2)">/clear</strong> to reset session.<br>
+        Type <strong style="color:var(--tether2)">/portfolio</strong> for portfolio summary.
+      </div>
+    </div>
+  </aside>
+
+  <!-- Chat -->
+  <main id="chat-panel">
+    <section id="dashboard-shell">
+      <div class="hero-strip">
+        <div class="hero-main">
+          <div class="hero-eyebrow">Treasury Command</div>
+          <div class="hero-title">Policy-bound USDt treasury autopilot</div>
+          <div class="hero-subtitle" id="dashboard-summary">Loading treasury state, regime posture, and autonomous receipts.</div>
+        </div>
+        <div class="hero-actions">
+          <button class="btn btn-secondary" id="dashboard-current-btn">My Treasury</button>
+          <button class="btn btn-secondary" id="dashboard-demo-btn">Judge Demo</button>
+          <button class="btn btn-secondary" id="dashboard-refresh-btn">Refresh</button>
+        </div>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="panel stat">
+          <div class="panel-label">Net Treasury</div>
+          <div class="stat-value" id="stat-total">$0.00</div>
+          <div class="stat-sub" id="stat-view">Demo view</div>
+        </div>
+        <div class="panel stat">
+          <div class="panel-label">Reserve</div>
+          <div class="stat-value" id="stat-reserve">$0.00</div>
+          <div class="stat-sub" id="stat-reserve-meta">0.0% in wallet USDT</div>
+        </div>
+        <div class="panel stat">
+          <div class="panel-label">XAUT Defense</div>
+          <div class="stat-value" id="stat-xaut">$0.00</div>
+          <div class="stat-sub" id="stat-xaut-meta">0.0% defensive allocation</div>
+        </div>
+        <div class="panel stat">
+          <div class="panel-label">Aave Yield</div>
+          <div class="stat-value" id="stat-aave">$0.00</div>
+          <div class="stat-sub" id="stat-aave-meta">0.0% deployed</div>
+        </div>
+        <div class="panel stat">
+          <div class="panel-label">Regime</div>
+          <div class="stat-value" id="stat-regime">Neutral</div>
+          <div class="stat-sub" id="stat-regime-meta">Signal confidence pending</div>
+        </div>
+        <div class="panel stat">
+          <div class="panel-label">Autopilot</div>
+          <div class="stat-value" id="stat-autopilot">Offline</div>
+          <div class="stat-sub" id="stat-autopilot-meta">Awaiting status</div>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-label">Allocation Bands</div>
+          <div class="allocation-bar">
+            <div class="allocation-segment">
+              <span>Reserve</span>
+              <strong id="band-reserve">$0.00</strong>
+              <div class="stat-sub" id="band-reserve-meta">Floor pending</div>
+            </div>
+            <div class="allocation-segment">
+              <span>XAUT</span>
+              <strong id="band-xaut">0.0%</strong>
+              <div class="stat-sub" id="band-xaut-meta">Target pending</div>
+            </div>
+            <div class="allocation-segment">
+              <span>Yield</span>
+              <strong id="band-yield">0.0%</strong>
+              <div class="stat-sub" id="band-yield-meta">Ceiling pending</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-label">Policy Controls</div>
+          <div id="policy-list">
+            <div class="muted-empty">Loading policy bands.</div>
+          </div>
+          <div class="policy-actions">
+            <div class="policy-status" id="policy-status">Policy controls loading.</div>
+            <button class="btn btn-secondary" id="policy-save-btn">Save Policy</button>
+          </div>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-label">Latest Receipts</div>
+          <div id="receipt-list">
+            <div class="muted-empty">Loading autonomous receipts.</div>
+          </div>
+        </div>
+
+        <div class="panel wide">
+          <div class="panel-label">Ops And Signals</div>
+          <div class="mini-list" id="ops-list">
+            <div class="muted-empty">Loading x402 and market posture.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="messages">
+      <div class="msg assistant">
+        <div class="msg-meta">nexus</div>
+        <div class="msg-bubble">Nexus is online. I coordinate a policy-bound treasury system across Arbitrum One.
+
+Available: treasury · market · swap · yield · risk · bridge · coordinator
+
+Ask me anything about your wallet, or say "swap 10 USDT for ETH" to get started.</div>
+      </div>
+    </div>
+    <div id="input-area">
+      <span class="prompt-prefix">›</span>
+      <textarea
+        id="msg-input"
+        rows="1"
+        placeholder="Ask Nexus anything..."
+        autocomplete="off"
+        spellcheck="false"
+      ></textarea>
+      <button id="send-btn">Send</button>
+    </div>
+  </main>
+
+  <!-- Reasoning panel -->
+  <aside id="reasoning-panel">
+    <div id="reasoning-header">
+      <span class="title">agent reasoning</span>
+      <button id="reasoning-clear">clear</button>
+    </div>
+    <div id="reasoning-log">
+      <div id="reasoning-empty">Agent reasoning steps<br>will appear here.</div>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+  const token = new URLSearchParams(location.search).get('token') || '';
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const authStatusEl = document.getElementById('auth-status');
+  const authAddressEl = document.getElementById('auth-address');
+  const connectWalletBtn = document.getElementById('connect-wallet-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+  const dashboardCurrentBtn = document.getElementById('dashboard-current-btn');
+  const dashboardDemoBtn = document.getElementById('dashboard-demo-btn');
+  const dashboardRefreshBtn = document.getElementById('dashboard-refresh-btn');
+  const policySaveBtn = document.getElementById('policy-save-btn');
+  const policyStatusEl = document.getElementById('policy-status');
+
+  let GUEST_USER_ID = localStorage.getItem('nexus_guest_user_id');
+  if (!GUEST_USER_ID) {
+    GUEST_USER_ID = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem('nexus_guest_user_id', GUEST_USER_ID);
+  }
+
+  let auth = loadAuthState();
+
+  let ws = null;
+  let pendingConfirm = false;
+  let typingEl = null;
+
+  const messagesEl = document.getElementById('messages');
+  const inputEl = document.getElementById('msg-input');
+  const sendBtn = document.getElementById('send-btn');
+  const reasoningLog = document.getElementById('reasoning-log');
+  const reasoningEmpty = document.getElementById('reasoning-empty');
+  const wsStatus = document.getElementById('ws-status');
+  const wsStatusText = document.getElementById('ws-status-text');
+  let dashboardView = auth ? 'current' : 'demo';
+
+  connectWalletBtn.addEventListener('click', connectWallet);
+  logoutBtn.addEventListener('click', logout);
+  dashboardCurrentBtn.addEventListener('click', () => refreshDashboard('current'));
+  dashboardDemoBtn.addEventListener('click', () => refreshDashboard('demo'));
+  dashboardRefreshBtn.addEventListener('click', () => refreshDashboard(dashboardView));
+  policySaveBtn.addEventListener('click', savePolicy);
+
+  // Auto-resize textarea
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
+  });
+
+  inputEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  sendBtn.addEventListener('click', sendMessage);
+
+  document.getElementById('reasoning-clear').addEventListener('click', () => {
+    reasoningLog.innerHTML = '';
+    reasoningLog.appendChild(reasoningEmpty);
+    reasoningEmpty.style.display = 'block';
+  });
+
+  function loadAuthState() {
+    const sessionToken = localStorage.getItem('nexus_session_token');
+    const userId = localStorage.getItem('nexus_session_user_id');
+    const ownerAddress = localStorage.getItem('nexus_owner_address');
+    if (!sessionToken || !userId || !ownerAddress) return null;
+    return { sessionToken, userId, ownerAddress };
+  }
+
+  function persistAuthState(session) {
+    localStorage.setItem('nexus_session_token', session.sessionToken);
+    localStorage.setItem('nexus_session_user_id', session.userId);
+    localStorage.setItem('nexus_owner_address', session.ownerAddress);
+    auth = session;
+    renderAuthState();
+  }
+
+  function clearAuthState() {
+    localStorage.removeItem('nexus_session_token');
+    localStorage.removeItem('nexus_session_user_id');
+    localStorage.removeItem('nexus_owner_address');
+    auth = null;
+    renderAuthState();
+  }
+
+  function renderAuthState() {
+    if (auth) {
+      authStatusEl.textContent = 'Wallet-authenticated session';
+      authAddressEl.textContent = `${auth.ownerAddress.slice(0, 8)}...${auth.ownerAddress.slice(-6)}`;
+      authAddressEl.title = auth.ownerAddress;
+      connectWalletBtn.textContent = 'Reconnect Wallet';
+      logoutBtn.style.display = 'inline-flex';
+      return;
+    }
+
+    authStatusEl.textContent = 'Guest session';
+    authAddressEl.textContent = 'Not signed in';
+    authAddressEl.title = '';
+    connectWalletBtn.textContent = 'Connect Wallet';
+    logoutBtn.style.display = 'none';
+  }
+
+  function buildWsUrl() {
+    const params = new URLSearchParams();
+    if (token) params.set('token', token);
+    if (auth?.sessionToken) {
+      params.set('session', auth.sessionToken);
+    } else {
+      params.set('guest', GUEST_USER_ID);
+    }
+    const qs = params.toString();
+    return qs ? `${wsProtocol}//${location.host}?${qs}` : `${wsProtocol}//${location.host}`;
+  }
+
+  async function apiFetch(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (auth?.sessionToken) headers.set('Authorization', `Bearer ${auth.sessionToken}`);
+    const url = token
+      ? `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+      : path;
+    return fetch(url, { ...options, headers });
+  }
+
+  async function connectWallet() {
+    if (!window.ethereum) {
+      appendMessage('error', 'Wallet connection requires an injected EVM wallet such as MetaMask.');
+      return;
+    }
+
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const address = accounts?.[0];
+      if (!address) throw new Error('No wallet address returned');
+
+      const challengeRes = await apiFetch('/api/auth/challenge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address }),
+      });
+      const challengeData = await challengeRes.json();
+      if (!challengeRes.ok || !challengeData.success) {
+        throw new Error(challengeData.error || 'Challenge request failed');
+      }
+
+      const signature = await window.ethereum.request({
+        method: 'personal_sign',
+        params: [challengeData.challenge.message, address],
+      });
+
+      const verifyRes = await apiFetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address, signature }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok || !verifyData.success) {
+        throw new Error(verifyData.error || 'Wallet verification failed');
+      }
+
+      persistAuthState(verifyData.session);
+      dashboardView = 'current';
+      appendMessage('assistant', `Wallet linked: ${verifyData.session.ownerAddress.slice(0, 8)}...${verifyData.session.ownerAddress.slice(-6)}`);
+      reconnectSocket();
+      refreshDashboard('current');
+    } catch (err) {
+      appendMessage('error', `Wallet login failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function logout() {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Best effort
+    }
+    clearAuthState();
+    dashboardView = 'demo';
+    reconnectSocket();
+    refreshDashboard('demo');
+  }
+
+  function reconnectSocket() {
+    if (ws) {
+      try { ws.close(); } catch {}
+    }
+    connect();
+  }
+
+  async function loadDemoSnapshot() {
+    try {
+      await refreshDashboard('demo');
+      const res = await apiFetch('/api/demo/state');
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Demo snapshot unavailable');
+      }
+
+      const demo = data.demo;
+      const txCount = Array.isArray(demo.transactions) ? demo.transactions.length : 0;
+      const x402Count = Array.isArray(demo.x402Payments) ? demo.x402Payments.length : 0;
+      const ruleCount = Array.isArray(demo.rules) ? demo.rules.length : 0;
+      const receiptLines = Array.isArray(demo.receipts)
+        ? demo.receipts.slice(0, 3).map((receipt) => {
+            const ctx = receipt.receiptContext || {};
+            return `• ${receipt.agent}.${receipt.intent} — ${ctx.summary || receipt.status}${receipt.txHash ? ` | tx: ${receipt.txHash}` : ''}`;
+          })
+        : [];
+
+      appendMessage('assistant', [
+        'Demo Account Snapshot',
+        `User: ${demo.userId}`,
+        `Wallet: ${demo.wallet?.address || 'unavailable'}`,
+        `Mode: ${demo.wallet?.mode || 'unknown'}`,
+        '',
+        demo.portfolio || 'No portfolio summary available.',
+        '',
+        demo.market || 'No market regime snapshot available.',
+        '',
+        demo.limits || 'No risk policy available.',
+        '',
+        'Treasury Policy',
+        `Reserve floor: $${Number(demo.policy?.reserveFloorUsdt || 0).toFixed(2)}`,
+        `XAUT target: ${Math.round(Number(demo.policy?.targetXautPercent || 0) * 100)}%`,
+        `XAUT ceiling: ${Math.round(Number(demo.policy?.maxXautPercent || 0) * 100)}%`,
+        `Yield ceiling: ${Math.round(Number(demo.policy?.maxYieldPercent || 0) * 100)}%`,
+      ].join('\n'));
+
+      appendMessage('assistant', [
+        'Demo Inspection',
+        `Rules: ${ruleCount}`,
+        `Transactions: ${txCount}`,
+        `x402 payments: ${x402Count}`,
+        x402Count > 0 ? `Latest x402 tx: ${demo.x402Payments[0].tx_hash || 'pending'}` : 'No x402 payments logged yet.',
+        '',
+        'Recent Policy Receipts',
+        ...(receiptLines.length > 0 ? receiptLines : ['• No autonomous policy receipts logged yet.']),
+      ].join('\n'));
+
+      if (Array.isArray(demo.reasoning) && demo.reasoning.length > 0) {
+        renderReasoning(demo.reasoning);
+        highlightActiveAgents(demo.reasoning);
+      }
+    } catch (err) {
+      appendMessage('error', `Demo snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function connect() {
+    ws = new WebSocket(buildWsUrl());
+
+    ws.onopen = () => {
+      wsStatus.className = 'connected';
+      wsStatusText.textContent = 'connected';
+    };
+
+    ws.onclose = () => {
+      wsStatus.className = '';
+      wsStatusText.textContent = 'reconnecting...';
+      setTimeout(connect, 2000);
+    };
+
+    ws.onerror = () => {
+      wsStatus.className = '';
+      wsStatusText.textContent = 'error';
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      handleIncoming(data);
+    };
+  }
+
+  async function refreshDashboard(view = auth ? 'current' : 'demo') {
+    dashboardView = view;
+    const summaryEl = document.getElementById('dashboard-summary');
+    summaryEl.textContent = 'Refreshing treasury, policy, and receipt state...';
+
+    try {
+      const res = await apiFetch(`/api/dashboard/state?view=${encodeURIComponent(view)}`);
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Dashboard unavailable');
+      }
+      renderDashboard(data.dashboard);
+    } catch (err) {
+      summaryEl.textContent = `Dashboard unavailable: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  function renderDashboard(dashboard) {
+    const balances = dashboard.balances || {};
+    const policy = dashboard.policy || {};
+    const regime = dashboard.regime || {};
+    const receipts = Array.isArray(dashboard.receipts) ? dashboard.receipts : [];
+    const x402Payments = Array.isArray(dashboard.x402Payments) ? dashboard.x402Payments : [];
+
+    document.getElementById('dashboard-summary').textContent =
+      dashboard.view === 'demo'
+        ? 'Judge demo view: inspect live treasury posture, policy bands, and autonomous receipts without spending funds.'
+        : `Live treasury for ${dashboard.wallet?.address ? `${dashboard.wallet.address.slice(0, 8)}...${dashboard.wallet.address.slice(-6)}` : dashboard.userId}.`;
+
+    document.getElementById('stat-total').textContent = formatCurrency(balances.totalUsdValue);
+    document.getElementById('stat-view').textContent = dashboard.view === 'demo' ? 'Judge demo account' : 'Authenticated wallet view';
+    document.getElementById('stat-reserve').textContent = formatCurrency(balances.usdt);
+    document.getElementById('stat-reserve-meta').textContent = `${formatPercent(balances.reservePct)} in wallet USDT`;
+    document.getElementById('stat-xaut').textContent = formatCurrency(balances.xautUsdValue);
+    document.getElementById('stat-xaut-meta').textContent = `${formatPercent(balances.xautPct)} defensive allocation`;
+    document.getElementById('stat-aave').textContent = formatCurrency(balances.aaveCollateralUsd);
+    document.getElementById('stat-aave-meta').textContent = `${formatPercent(balances.yieldPct)} deployed | debt ${formatCurrency(balances.aaveDebtUsd)}`;
+    document.getElementById('stat-regime').textContent = regime.posture ? regime.posture.toUpperCase() : 'UNKNOWN';
+    document.getElementById('stat-regime-meta').innerHTML = [
+      regime.fearGreedValue != null ? `Fear & Greed ${regime.fearGreedValue}${regime.fearGreedClassification ? ` (${regime.fearGreedClassification})` : ''}` : 'Fear & Greed unavailable',
+      regime.gold24hChangePct != null ? `Gold 24h ${Number(regime.gold24hChangePct).toFixed(2)}%` : 'Gold move unavailable',
+    ].join('<br>');
+    document.getElementById('stat-autopilot').textContent = dashboard.autopilot?.running ? 'RUNNING' : 'PAUSED';
+    document.getElementById('stat-autopilot-meta').innerHTML = [
+      dashboard.wallet?.mode ? `Wallet mode: ${dashboard.wallet.mode}` : 'Wallet mode unavailable',
+      balances.healthFactor ? `HF ${Number(balances.healthFactor).toFixed(2)}` : 'No active debt position',
+    ].join('<br>');
+
+    document.getElementById('band-reserve').textContent = formatCurrency(balances.usdt);
+    document.getElementById('band-reserve-meta').textContent = `Policy floor ${formatCurrency(policy.reserveFloorUsdt)}`;
+    document.getElementById('band-xaut').textContent = formatPercent(balances.xautPct);
+    document.getElementById('band-xaut-meta').textContent = `Target ${formatPercent(Number(policy.targetXautPercent || 0) * 100)} | ceiling ${formatPercent(Number(policy.maxXautPercent || 0) * 100)}`;
+    document.getElementById('band-yield').textContent = formatPercent(balances.yieldPct);
+    document.getElementById('band-yield-meta').textContent = `Ceiling ${formatPercent(Number(policy.maxYieldPercent || 0) * 100)}`;
+
+    const readOnlyPolicy = dashboard.view === 'demo' || !auth;
+    document.getElementById('policy-list').innerHTML = `
+      <div class="policy-form">
+        <div class="policy-field">
+          <label>Reserve floor (USDt)</label>
+          <input id="policy-reserve-floor" type="number" min="0" step="0.01" value="${escapeAttr(policy.reserveFloorUsdt || 0)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>Max action size</label>
+          <input id="policy-max-action" type="number" min="1" step="0.01" value="${escapeAttr(policy.maxActionUsdt || 0)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>XAUT target %</label>
+          <input id="policy-target-xaut" type="number" min="0" max="100" step="0.1" value="${escapeAttr(Number(policy.targetXautPercent || 0) * 100)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>XAUT max %</label>
+          <input id="policy-max-xaut" type="number" min="0" max="100" step="0.1" value="${escapeAttr(Number(policy.maxXautPercent || 0) * 100)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>Yield max %</label>
+          <input id="policy-max-yield" type="number" min="0" max="100" step="0.1" value="${escapeAttr(Number(policy.maxYieldPercent || 0) * 100)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>Cooldown (seconds)</label>
+          <input id="policy-cooldown" type="number" min="0" step="1" value="${escapeAttr(policy.rebalanceCooldownSeconds || 0)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>Min rebalance</label>
+          <input id="policy-min-rebalance" type="number" min="0" step="0.01" value="${escapeAttr(policy.minRebalanceUsdt || 0)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field">
+          <label>Min yield deploy</label>
+          <input id="policy-min-yield-deploy" type="number" min="0" step="0.01" value="${escapeAttr(policy.minYieldDeployUsdt || 0)}" ${readOnlyPolicy ? 'disabled' : ''}>
+        </div>
+        <div class="policy-field full">
+          <label>Automation</label>
+          <select id="policy-enabled" ${readOnlyPolicy ? 'disabled' : ''}>
+            <option value="true" ${policy.enabled ? 'selected' : ''}>Enabled</option>
+            <option value="false" ${!policy.enabled ? 'selected' : ''}>Paused</option>
+          </select>
+        </div>
+      </div>
+    `;
+    policySaveBtn.disabled = readOnlyPolicy;
+    policyStatusEl.textContent = readOnlyPolicy
+      ? 'Demo policy is read-only. Sign in to edit your treasury controls.'
+      : 'Policy changes apply to future autonomous decisions.';
+
+    document.getElementById('receipt-list').innerHTML = receipts.length > 0
+      ? receipts.slice(0, 4).map((receipt) => {
+          const ctx = receipt.receiptContext || {};
+          const risk = receipt.risk || {};
+          return `
+            <div class="receipt-row">
+              <div>
+                <div class="receipt-title">${escapeHtml(ctx.summary || `${receipt.agent}.${receipt.intent}`)}</div>
+                <div class="receipt-meta">${escapeHtml(ctx.reason || 'No receipt reason captured.')}</div>
+              </div>
+              <div class="receipt-side">
+                ${receipt.amountUsdt ? `${formatCurrency(receipt.amountUsdt)}<br>` : ''}
+                ${risk.tier ? `${escapeHtml(risk.tier)} ${risk.score || ''}<br>` : ''}
+                ${receipt.txHash ? escapeHtml(String(receipt.txHash).slice(0, 14) + '...') : escapeHtml(String(receipt.status || 'pending'))}
+              </div>
+            </div>
+          `;
+        }).join('')
+      : '<div class="muted-empty">No autonomous receipts recorded yet.</div>';
+
+    document.getElementById('ops-list').innerHTML = [
+      policyRow('Regime posture', `<span class="status-chip ${regime.posture || 'neutral'}">${escapeHtml((regime.posture || 'neutral').replace('-', ' '))}</span>`),
+      policyRow('XAUT mark', formatCurrency(regime.xautUsdPrice)),
+      policyRow('x402 ops payments', x402Payments.length ? `${x402Payments.length} recent payments` : 'None recorded'),
+      policyRow('Latest x402 tx', x402Payments[0]?.tx_hash ? String(x402Payments[0].tx_hash).slice(0, 14) + '...' : 'Pending'),
+      policyRow('Autopilot status', `<span class="status-chip ${dashboard.autopilot?.running ? 'running' : 'paused'}">${dashboard.autopilot?.running ? 'active' : 'paused'}</span>`),
+    ].join('');
+  }
+
+  async function savePolicy() {
+    if (!auth || dashboardView !== 'current') {
+      policyStatusEl.textContent = 'Sign in to edit policy. Demo mode stays read-only.';
+      return;
+    }
+
+    const body = {
+      reserveFloorUsdt: getNumericField('policy-reserve-floor'),
+      maxActionUsdt: getNumericField('policy-max-action'),
+      targetXautPercent: getNumericField('policy-target-xaut') / 100,
+      maxXautPercent: getNumericField('policy-max-xaut') / 100,
+      maxYieldPercent: getNumericField('policy-max-yield') / 100,
+      rebalanceCooldownSeconds: getNumericField('policy-cooldown'),
+      minRebalanceUsdt: getNumericField('policy-min-rebalance'),
+      minYieldDeployUsdt: getNumericField('policy-min-yield-deploy'),
+      enabled: document.getElementById('policy-enabled').value === 'true',
+    };
+
+    policyStatusEl.textContent = 'Saving policy...';
+    try {
+      const res = await apiFetch('/api/policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Policy save failed');
+      }
+      policyStatusEl.textContent = 'Policy saved. Nexus will use the new treasury bands on the next cycle.';
+      await refreshDashboard('current');
+    } catch (err) {
+      policyStatusEl.textContent = `Save failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  function policyRow(label, value) {
+    return `<div class="mini-row"><span>${escapeHtml(label)}</span><span>${typeof value === 'string' && value.includes('status-chip') ? value : escapeHtml(String(value))}</span></div>`;
+  }
+
+  function getNumericField(id) {
+    const el = document.getElementById(id);
+    return Number(el && 'value' in el ? el.value : 0);
+  }
+
+  function formatCurrency(value) {
+    const num = Number(value || 0);
+    return `$${num.toLocaleString('en-US', { minimumFractionDigits: num < 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
+  }
+
+  function formatPercent(value) {
+    const num = Number(value || 0);
+    return `${num.toFixed(1)}%`;
+  }
+
+  function escapeAttr(value) {
+    return String(value ?? '').replace(/"/g, '&quot;');
+  }
+
+  function handleIncoming(data) {
+    removeTyping();
+
+    if (data.type === 'pong') return;
+
+    if (data.type === 'wallet') {
+      const w = data.wallet;
+      const addrEl = document.getElementById('wallet-address');
+      const chainEl = document.getElementById('wallet-chain');
+      const modeEl = document.getElementById('wallet-mode');
+      if (w.address && w.address !== 'unavailable') {
+        addrEl.textContent = w.address.slice(0, 8) + '...' + w.address.slice(-6);
+        addrEl.title = w.address;
+      } else {
+        addrEl.textContent = 'wallet unavailable';
+      }
+      chainEl.textContent = w.chainName || 'Arbitrum One';
+      modeEl.textContent = w.mode || 'EOA';
+      refreshDashboard(auth ? 'current' : dashboardView);
+      return;
+    }
+
+    if (data.type === 'typing') {
+      showTyping();
+      return;
+    }
+
+    if (data.type === 'reasoning') {
+      renderReasoning(data.steps || []);
+      highlightActiveAgents(data.steps || []);
+      return;
+    }
+
+    if (data.type === 'confirm_prompt') {
+      pendingConfirm = true;
+      appendConfirmMessage(data.content, data.riskScore, data.riskTier);
+      return;
+    }
+
+    if (data.type === 'response') {
+      pendingConfirm = false;
+      appendMessage('assistant', data.content, data.success);
+      refreshDashboard(auth ? 'current' : dashboardView);
+      return;
+    }
+
+    if (data.type === 'error') {
+      appendMessage('error', 'Error: ' + data.content);
+      return;
+    }
+
+    if (data.type === 'event') {
+      appendEventCard(data.event);
+      return;
+    }
+
+    if (data.type === 'event_replay') {
+      const events = data.events || [];
+      if (events.length > 0) {
+        reasoningEmpty.style.display = 'none';
+        events.forEach(ev => appendEventCard(ev));
+      }
+      return;
+    }
+  }
+
+  function sendMessage() {
+    const text = inputEl.value.trim();
+    if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    appendMessage('user', text);
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+
+    ws.send(JSON.stringify({ type: 'message', content: text, userId: auth?.userId || GUEST_USER_ID }));
+  }
+
+  function sendCommand(text) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    appendMessage('user', text);
+    ws.send(JSON.stringify({ type: 'message', content: text, userId: auth?.userId || GUEST_USER_ID }));
+  }
+
+  function confirmAction() {
+    if (!ws) return;
+    removeConfirmButtons();
+    ws.send(JSON.stringify({ type: 'confirm', userId: auth?.userId || GUEST_USER_ID }));
+  }
+
+  function cancelAction() {
+    if (!ws) return;
+    removeConfirmButtons();
+    pendingConfirm = false;
+    ws.send(JSON.stringify({ type: 'cancel', userId: auth?.userId || GUEST_USER_ID }));
+  }
+
+  function removeConfirmButtons() {
+    document.querySelectorAll('.confirm-actions').forEach(el => el.remove());
+  }
+
+  function appendMessage(role, content, success = true) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = role === 'user' ? 'you' : role === 'error' ? 'error' : 'nexus';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    bubble.textContent = content;
+
+    div.appendChild(meta);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  function appendConfirmMessage(content, riskScore, riskTier) {
+    const div = document.createElement('div');
+    div.className = 'msg confirm assistant';
+
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = 'nexus — confirmation required';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+
+    if (riskScore != null && riskTier) {
+      const badge = document.createElement('div');
+      badge.className = `risk-badge ${riskTier}`;
+      badge.textContent = `Risk ${riskScore}/10 — ${riskTier}`;
+      bubble.appendChild(badge);
+    }
+
+    const text = document.createElement('div');
+    text.style.whiteSpace = 'pre-wrap';
+    text.textContent = content;
+    bubble.appendChild(text);
+
+    const actions = document.createElement('div');
+    actions.className = 'confirm-actions';
+
+    const yes = document.createElement('button');
+    yes.className = 'btn btn-confirm';
+    yes.textContent = 'Confirm';
+    yes.onclick = confirmAction;
+
+    const no = document.createElement('button');
+    no.className = 'btn btn-cancel';
+    no.textContent = 'Cancel';
+    no.onclick = cancelAction;
+
+    actions.appendChild(yes);
+    actions.appendChild(no);
+    bubble.appendChild(actions);
+
+    div.appendChild(meta);
+    div.appendChild(bubble);
+    messagesEl.appendChild(div);
+    scrollToBottom();
+  }
+
+  function showTyping() {
+    if (typingEl) return;
+    typingEl = document.createElement('div');
+    typingEl.className = 'msg assistant';
+    typingEl.innerHTML = `
+      <div class="msg-meta">nexus</div>
+      <div class="typing-indicator">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>`;
+    messagesEl.appendChild(typingEl);
+    scrollToBottom();
+  }
+
+  function removeTyping() {
+    if (typingEl) {
+      typingEl.remove();
+      typingEl = null;
+    }
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function renderReasoning(steps) {
+    reasoningLog.innerHTML = '';
+    if (steps.length === 0) {
+      reasoningLog.appendChild(reasoningEmpty);
+      reasoningEmpty.style.display = 'block';
+      return;
+    }
+    reasoningEmpty.style.display = 'none';
+
+    steps.forEach((step, i) => {
+      const status = step.status || 'other';
+      const el = document.createElement('div');
+      el.className = `r-step ${status}`;
+
+      let header = `<span class="r-agent ${status}">${step.agent.toUpperCase()}</span>`;
+      header += `<span class="r-action">· ${step.action}</span>`;
+      if (step.riskScore != null && step.riskTier) {
+        header += `<span class="r-risk ${step.riskTier}">${step.riskScore}/10 ${step.riskTier}</span>`;
+      }
+
+      let body = `<div class="r-reasoning">${escapeHtml(step.reasoning)}</div>`;
+      if (step.result) {
+        body += `<div class="r-result">${escapeHtml(step.result)}</div>`;
+      }
+
+      el.innerHTML = `<div>${header}</div>${body}`;
+      reasoningLog.appendChild(el);
+    });
+
+    reasoningLog.scrollTop = reasoningLog.scrollHeight;
+  }
+
+  function highlightActiveAgents(steps) {
+    const agents = ['coordinator', 'treasury', 'market', 'swap', 'yield', 'risk', 'bridge'];
+    agents.forEach(name => {
+      const el = document.getElementById(`badge-${name}`);
+      if (el) el.className = 'agent-badge';
+    });
+    const active = new Set(steps.map(s => s.agent.toLowerCase()));
+    active.forEach(name => {
+      const el = document.getElementById(`badge-${name}`);
+      if (el) el.className = 'agent-badge active';
+    });
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // Map NexusEvent types to visual cards in the reasoning panel
+  function appendEventCard(ev) {
+    if (!ev || !ev.type) return;
+    reasoningEmpty.style.display = 'none';
+
+    const EVENT_MAP = {
+      cycle_start:    { agent: 'Autopilot', status: 'other', label: 'cycle-start' },
+      perceive:       { agent: 'Autopilot', status: 'pass',  label: 'perceive' },
+      evaluate:       { agent: 'Autopilot', status: null,     label: 'evaluate' },
+      decide:         { agent: ev.agent ? ev.agent.charAt(0).toUpperCase() + ev.agent.slice(1) : 'Autopilot', status: 'pass', label: 'decide' },
+      act:            { agent: 'Autopilot', status: null,     label: 'execute' },
+      guard_block:    { agent: 'NexusGuard', status: 'fail',  label: 'BLOCKED' },
+      apy_alert:      { agent: 'Autopilot', status: 'warn',  label: 'apy-alert' },
+      health_alert:   { agent: 'Autopilot', status: null,     label: 'health-alert' },
+      idle_capital:   { agent: 'Autopilot', status: null,     label: 'idle-capital' },
+      cycle_complete: { agent: 'Autopilot', status: 'pass',  label: 'cycle-end' },
+    };
+
+    const map = EVENT_MAP[ev.type] || { agent: 'System', status: 'other', label: ev.type };
+
+    // Resolve dynamic status for types that depend on data
+    let status = map.status;
+    if (ev.type === 'evaluate') status = ev.status || 'other';
+    if (ev.type === 'act') status = ev.success ? 'pass' : 'fail';
+    if (ev.type === 'health_alert') status = ev.tier === 'critical' ? 'fail' : 'warn';
+    if (ev.type === 'idle_capital') status = ev.decision === 'supply' ? 'pass' : 'warn';
+
+    // Build reasoning text based on event type
+    let reasoning = '';
+    let result = '';
+    const ts = ev.ts ? new Date(ev.ts).toLocaleTimeString() : '';
+
+    switch (ev.type) {
+      case 'cycle_start':
+        reasoning = 'Autonomous monitoring cycle started';
+        break;
+      case 'perceive':
+        reasoning = 'Portfolio snapshot: ' + ev.ethBalance + ' ETH, ' + ev.usdtBalance + ' USDT';
+        result = 'Total: $' + (ev.totalUsd || 0).toFixed(2) + ' | ETH price: $' + (ev.ethPrice || 0).toLocaleString();
+        break;
+      case 'evaluate':
+        reasoning = ev.check + ': ' + ev.result;
+        break;
+      case 'decide':
+        reasoning = ev.decision + (ev.reason ? ' — ' + ev.reason : '');
+        if (ev.amount) result = 'Amount: ' + ev.amount;
+        break;
+      case 'act':
+        reasoning = ev.message || ev.action;
+        if (ev.txHash) result = 'tx: ' + ev.txHash.slice(0, 14) + '...';
+        break;
+      case 'guard_block':
+        reasoning = 'Transaction $' + ev.amount + ' rejected';
+        result = ev.reason;
+        break;
+      case 'apy_alert':
+        reasoning = 'APY dropped ' + (ev.dropPct || 0).toFixed(1) + '% — from ' + (ev.baseline || 0).toFixed(2) + '% to ' + (ev.current || 0).toFixed(2) + '%';
+        break;
+      case 'health_alert':
+        reasoning = 'Health factor: ' + (ev.healthFactor || 0).toFixed(2) + ' (' + ev.tier + ')';
+        break;
+      case 'idle_capital':
+        reasoning = 'LLM decision: ' + ev.decision + ' — ' + (ev.reason || '');
+        result = ev.decision === 'supply' ? 'Deploy $' + ev.amount + ' at ' + (ev.apy || 0).toFixed(2) + '% APY' : '';
+        break;
+      case 'cycle_complete':
+        reasoning = 'Cycle complete — ' + (ev.alertCount || 0) + ' alert(s) in ' + ((ev.durationMs || 0) / 1000).toFixed(1) + 's';
+        break;
+      default:
+        reasoning = JSON.stringify(ev);
+    }
+
+    const el = document.createElement('div');
+    el.className = 'r-step ' + status;
+
+    let header = '<span class="r-agent ' + status + '">' + escapeHtml(map.agent.toUpperCase()) + '</span>';
+    header += '<span class="r-action">\u00b7 ' + escapeHtml(map.label) + '</span>';
+    if (ts) header += '<span class="r-action" style="float:right;color:var(--text3)">' + escapeHtml(ts) + '</span>';
+
+    let body = '<div class="r-reasoning">' + escapeHtml(reasoning) + '</div>';
+    if (result) body += '<div class="r-result">' + escapeHtml(result) + '</div>';
+
+    el.innerHTML = '<div>' + header + '</div>' + body;
+    reasoningLog.appendChild(el);
+    reasoningLog.scrollTop = reasoningLog.scrollHeight;
+  }
+
+  renderAuthState();
+  connect();
+  refreshDashboard(auth ? 'current' : 'demo');
+  setInterval(() => ws?.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'ping' })), 30000);
+  window.sendCommand = sendCommand;
+  window.loadDemoSnapshot = loadDemoSnapshot;
+</script>
+</body>
+</html>
