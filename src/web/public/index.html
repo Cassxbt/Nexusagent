@@ -877,6 +877,7 @@ Ask me anything, or click a quick command on the left.</div>
   let auth = loadAuthState();
   let ws = null;
   let pendingConfirm = false;
+  let confirmInFlight = false;
   let typingEl = null;
   let dashboardView = auth ? 'current' : (token ? 'operator' : 'demo');
   let dashboardOpen = false;
@@ -1272,7 +1273,7 @@ Ask me anything, or click a quick command on the left.</div>
             <div class="receipt-title">${escapeHtml(String(r.intent || '—'))}</div>
             <div class="receipt-meta">${escapeHtml(String(r.summary || r.agent || ''))}</div>
             <div class="receipt-meta">${escapeHtml(String(r.policyName || ''))}${r.policyReason ? ' · ' + escapeHtml(String(r.policyReason)) : ''}</div>
-            <div class="receipt-meta">${r.txHash ? escapeHtml(String(r.txHash)) : 'no tx hash recorded'} · ${formatTimeAgo(r.createdAt)}</div>
+            <div class="receipt-meta">${r.txHash ? txLink(String(r.txHash)) : 'no tx hash recorded'} · ${formatTimeAgo(r.createdAt)}</div>
           </div>
           <div class="receipt-side">
             ${r.amountUsdt ? `$${Number(r.amountUsdt).toFixed(2)}<br>` : ''}
@@ -1375,6 +1376,7 @@ Ask me anything, or click a quick command on the left.</div>
     if (data.type === 'confirm_prompt') {
       removeTyping();
       pendingConfirm = true;
+      confirmInFlight = false;
       appendConfirmMessage(data.content, data.riskScore, data.riskTier);
       return;
     }
@@ -1382,6 +1384,7 @@ Ask me anything, or click a quick command on the left.</div>
     if (data.type === 'response') {
       removeTyping();
       pendingConfirm = false;
+      confirmInFlight = false;
       appendMessage('assistant', data.content, data.success);
       refreshDashboard(auth ? 'current' : dashboardView);
       return;
@@ -1389,6 +1392,11 @@ Ask me anything, or click a quick command on the left.</div>
 
     if (data.type === 'error') {
       removeTyping();
+      if (confirmInFlight && !pendingConfirm && data.content === 'No pending action to confirm') {
+        confirmInFlight = false;
+        return;
+      }
+      confirmInFlight = false;
       appendMessage('error', 'Error: ' + data.content);
       return;
     }
@@ -1427,7 +1435,9 @@ Ask me anything, or click a quick command on the left.</div>
   }
 
   function confirmAction() {
-    if (!ws) return;
+    if (!ws || confirmInFlight || !pendingConfirm) return;
+    pendingConfirm = false;
+    confirmInFlight = true;
     removeConfirmButtons();
     ws.send(JSON.stringify({ type: 'confirm' }));
   }
@@ -1436,6 +1446,7 @@ Ask me anything, or click a quick command on the left.</div>
     if (!ws) return;
     removeConfirmButtons();
     pendingConfirm = false;
+    confirmInFlight = false;
     ws.send(JSON.stringify({ type: 'cancel' }));
   }
 
@@ -1453,12 +1464,26 @@ Ask me anything, or click a quick command on the left.</div>
 
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
-    bubble.textContent = content;
+    bubble.innerHTML = formatRichMessage(content);
 
     div.appendChild(meta);
     div.appendChild(bubble);
     messagesEl.appendChild(div);
     scrollToBottom();
+  }
+
+  function txLink(hash) {
+    const safeHash = escapeAttr(hash);
+    const shortHash = escapeHtml(`${hash.slice(0, 12)}…${hash.slice(-8)}`);
+    return `<a href="https://arbiscan.io/tx/${safeHash}" target="_blank" rel="noopener noreferrer">${shortHash}</a>`;
+  }
+
+  function formatRichMessage(content) {
+    const escaped = escapeHtml(String(content || ''));
+    const withTxLinks = escaped
+      .replace(/`(0x[a-fA-F0-9]{64})`/g, (_m, hash) => txLink(hash))
+      .replace(/\bTx:\s*`?(0x[a-fA-F0-9]{64})`?/g, (_m, hash) => `Tx: ${txLink(hash)}`);
+    return withTxLinks.replace(/\n/g, '<br>');
   }
 
   function appendConfirmMessage(content, riskScore, riskTier) {

@@ -9,6 +9,8 @@ import type { Agent, AgentRequest, AgentResponse } from './types.js';
 const SUPPORTED_TOKENS = ['USDT'];
 const SUPPORTED_TARGET_CHAINS = ['ethereum', 'base', 'polygon', 'optimism'];
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+const APPROVAL_WAIT_TIMEOUT_MS = 45_000;
+const APPROVAL_WAIT_POLL_MS = 1_500;
 
 export const bridgeAgent: Agent = {
   name: 'bridge',
@@ -35,6 +37,17 @@ export const bridgeAgent: Agent = {
 
 function getBridge(account: Awaited<ReturnType<typeof getAccount>>) {
   return account.getBridgeProtocol('usdt0') as unknown as InstanceType<typeof Usdt0ProtocolEvm>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function waitForReceipt(account: any, hash: string, label: string): Promise<void> {
+  const startedAt = Date.now();
+  while ((Date.now() - startedAt) < APPROVAL_WAIT_TIMEOUT_MS) {
+    const receipt = await account.getTransactionReceipt(hash);
+    if (receipt) return;
+    await new Promise((resolve) => setTimeout(resolve, APPROVAL_WAIT_POLL_MS));
+  }
+  throw new Error(`${label} transaction was sent but not confirmed in time. Try again once it is mined.`);
 }
 
 async function quoteBridge(
@@ -108,7 +121,8 @@ async function executeBridge(
     const account = await getRuntimeAccount(chain, userId);
 
     logReasoning({ agent: 'Bridge', action: 'approve', reasoning: `Approving USDT0 router to spend ${amount} USDT`, status: 'pass' });
-    await account.approve({ token: validation.tokenAddress, spender: poolAddress, amount: validation.baseAmount });
+    const approval = await account.approve({ token: validation.tokenAddress, spender: poolAddress, amount: validation.baseAmount });
+    await waitForReceipt(account, approval.hash, 'Approval');
 
     const bridge = getBridge(account);
     const result = await bridge.bridge({

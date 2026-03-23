@@ -9,6 +9,8 @@ import type { Agent, AgentRequest, AgentResponse } from './types.js';
 // Attempting supply/borrow with XAUT will revert on-chain.
 // XAUT can be bridged via wdk-protocol-bridge-usdt0-evm (XAUt0) or used for price queries.
 const AAVE_V3_UNSUPPORTED_TOKENS = new Set(['XAUT']);
+const APPROVAL_WAIT_TIMEOUT_MS = 45_000;
+const APPROVAL_WAIT_POLL_MS = 1_500;
 
 export const yieldAgent: Agent = {
   name: 'yield',
@@ -57,6 +59,17 @@ function getLending(account: Awaited<ReturnType<typeof getAccount>>) {
   return account.getLendingProtocol('aave') as unknown as InstanceType<typeof AaveProtocolEvm>;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function waitForReceipt(account: any, hash: string, label: string): Promise<void> {
+  const startedAt = Date.now();
+  while ((Date.now() - startedAt) < APPROVAL_WAIT_TIMEOUT_MS) {
+    const receipt = await account.getTransactionReceipt(hash);
+    if (receipt) return;
+    await new Promise((resolve) => setTimeout(resolve, APPROVAL_WAIT_POLL_MS));
+  }
+  throw new Error(`${label} transaction was sent but not confirmed in time. Try again once it is mined.`);
+}
+
 async function quoteSupply(chain = 'ethereum', token: string, amount: string, userId?: string): Promise<AgentResponse> {
   if (!token || !amount) return { success: false, message: 'Supply requires token and amount.' };
   if (AAVE_V3_UNSUPPORTED_TOKENS.has(token.toUpperCase())) {
@@ -103,7 +116,8 @@ async function supply(chain = 'ethereum', token: string, amount: string, userId?
     const account = await getRuntimeAccount(chain, userId);
 
     logReasoning({ agent: 'Yield', action: 'approve', reasoning: `Approving Aave Pool to spend ${amount} ${token}`, status: 'pass' });
-    await account.approve({ token: resolved.tokenAddress, spender: poolAddress, amount: resolved.baseAmount });
+    const approval = await account.approve({ token: resolved.tokenAddress, spender: poolAddress, amount: resolved.baseAmount });
+    await waitForReceipt(account, approval.hash, 'Approval');
     logReasoning({ agent: 'Yield', action: 'approve', reasoning: 'Approval confirmed', status: 'pass' });
 
     const lending = account.getLendingProtocol('aave');
@@ -264,7 +278,8 @@ async function repay(chain = 'ethereum', token: string, amount: string, rateMode
   try {
     const account = await getRuntimeAccount(chain, userId);
 
-    await account.approve({ token: resolved.tokenAddress, spender: poolAddress, amount: resolved.baseAmount });
+    const approval = await account.approve({ token: resolved.tokenAddress, spender: poolAddress, amount: resolved.baseAmount });
+    await waitForReceipt(account, approval.hash, 'Approval');
     logReasoning({ agent: 'Yield', action: 'approve', reasoning: 'Approval for repay confirmed', status: 'pass' });
 
     const lending = getLending(account);
