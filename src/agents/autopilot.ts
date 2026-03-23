@@ -514,7 +514,7 @@ async function checkBalanceDrift(userId: string, cfg: AutopilotConfig): Promise<
     }
 
     // Low ETH warning (gas)
-    if (ethBalance < BigInt(1e15)) { // < 0.001 ETH
+    if (ethBalance < BigInt(1e14)) { // < 0.0001 ETH
       return `⛽ *Low ETH for gas: ${ethReadable} ETH*\nYou may not be able to execute transactions. Top up your wallet.`;
     }
 
@@ -531,7 +531,7 @@ async function checkGasConditions(userId: string): Promise<string | null> {
     const ethReadable = fromBaseUnits(ethBalance, 18);
     const ethAmt = parseFloat(ethReadable);
 
-    if (ethAmt < 0.001) {
+    if (ethAmt < 0.0001) {
       logReasoning({
         agent: 'Autopilot',
         action: 'gas-check',
@@ -541,7 +541,7 @@ async function checkGasConditions(userId: string): Promise<string | null> {
       return `⛽ *Low ETH for gas: ${ethReadable} ETH*\nTransactions will fail without gas. Top up your wallet on Arbitrum.`;
     }
 
-    if (ethAmt < 0.005) {
+    if (ethAmt < 0.001) {
       logReasoning({
         agent: 'Autopilot',
         action: 'gas-check',
@@ -630,8 +630,8 @@ async function applyTreasuryPolicy(userId: string): Promise<string[]> {
   if (!usdtAddr || !xautAddr) return [];
 
   const account = await getOperatorAccount();
-  const usdtBalance = await account.getTokenBalance(usdtAddr);
-  const xautBalance = await account.getTokenBalance(xautAddr);
+  const usdtBalance = await account.getTokenBalance(usdtAddr).catch(() => 0n);
+  const xautBalance = await account.getTokenBalance(xautAddr).catch(() => 0n);
   const usdtAmount = parseFloat(fromBaseUnits(usdtBalance, 6));
   const xautAmount = parseFloat(fromBaseUnits(xautBalance, 6));
   const baselineApy = getBaselineApy(userId);

@@ -73,7 +73,7 @@ export async function getGuardParams(): Promise<OnChainRiskParams> {
     const json = await response.json() as { result?: string; error?: { message: string } };
 
     if (json.error || !json.result || json.result === '0x') {
-      markSourceHeartbeat('guard', 'unavailable', 'Guard contract call failed; using config fallback', {
+      markSourceHeartbeat('guard', 'degraded', 'Guard contract call failed; using config fallback', {
         source: 'config-fallback',
       });
       return fallback('config-fallback');
@@ -89,7 +89,7 @@ export async function getGuardParams(): Promise<OnChainRiskParams> {
     _cache = { params, expiresAt: Date.now() + CACHE_TTL_MS };
     return params;
   } catch {
-    markSourceHeartbeat('guard', 'unavailable', 'Guard RPC request failed; using config fallback', {
+    markSourceHeartbeat('guard', 'degraded', 'Guard RPC request failed; using config fallback', {
       source: 'config-fallback',
     });
     return fallback('config-fallback');
