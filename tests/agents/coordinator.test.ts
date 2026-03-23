@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { needsConfirmation, formatConfirmation, fallbackRouting } from '../../src/agents/coordinator.js';
+import { needsConfirmation, formatConfirmation, fallbackRouting, normalizeDecisionFromMessage } from '../../src/agents/coordinator.js';
 import type { RouteDecision } from '../../src/agents/types.js';
 
 describe('needsConfirmation', () => {
@@ -87,5 +87,70 @@ describe('fallbackRouting', () => {
     const decision = fallbackRouting('show portfolio summary');
     expect(decision.agent).toBe('market');
     expect(decision.intent).toBe('portfolio_summary');
+  });
+});
+
+describe('normalizeDecisionFromMessage', () => {
+  it('fills missing swap params from a simple natural-language swap', () => {
+    const decision = normalizeDecisionFromMessage(
+      'swap 1 usdt to eth on arbitrum',
+      {
+        agent: 'swap',
+        intent: 'execute_swap',
+        params: { amount: '1' },
+        plan: ['quote swap USDT to ETH', 'execute swap'],
+      },
+    );
+
+    expect(decision.params.amount).toBe('1');
+    expect(decision.params.tokenIn).toBe('USDT');
+    expect(decision.params.tokenOut).toBe('ETH');
+    expect(decision.params.chain).toBe('ethereum');
+    expect(decision.plan).toBeUndefined();
+  });
+
+  it('keeps a real multi-step plan when the prompt explicitly chains actions', () => {
+    const decision = normalizeDecisionFromMessage(
+      'swap 10 usdt to eth then supply it to aave',
+      {
+        agent: 'swap',
+        intent: 'execute_swap',
+        params: { amount: '10' },
+        plan: ['swap 10 USDT to ETH', 'supply ETH to Aave'],
+      },
+    );
+
+    expect(decision.plan).toEqual(['swap 10 USDT to ETH', 'supply ETH to Aave']);
+    expect(decision.params.tokenIn).toBe('USDT');
+    expect(decision.params.tokenOut).toBe('ETH');
+  });
+
+  it('fills missing yield params from a supply request', () => {
+    const decision = normalizeDecisionFromMessage(
+      'supply 25 usdt to aave',
+      {
+        agent: 'yield',
+        intent: 'supply',
+        params: {},
+      },
+    );
+
+    expect(decision.params.amount).toBe('25');
+    expect(decision.params.token).toBe('USDT');
+  });
+
+  it('fills missing transfer params from a send request', () => {
+    const decision = normalizeDecisionFromMessage(
+      'send 5 usdt to 0x1111111111111111111111111111111111111111',
+      {
+        agent: 'treasury',
+        intent: 'transfer',
+        params: {},
+      },
+    );
+
+    expect(decision.params.amount).toBe('5');
+    expect(decision.params.token).toBe('USDT');
+    expect(decision.params.to).toBe('0x1111111111111111111111111111111111111111');
   });
 });

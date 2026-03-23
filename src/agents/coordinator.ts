@@ -69,6 +69,109 @@ If the request needs multiple agents, set agent to the FIRST one needed and incl
 If you cannot understand the request or it is not related to DeFi/wallet operations, respond with:
 {"agent": "coordinator", "intent": "unknown", "params": {"message": "original message"}}`;
 
+function extractChain(message: string): string | undefined {
+  const lower = message.toLowerCase();
+  if (lower.includes('arbitrum')) return 'ethereum';
+  if (lower.includes('ethereum') || lower.includes('mainnet')) return 'ethereum';
+  return undefined;
+}
+
+function extractSwapParams(message: string): Record<string, string> {
+  const match = message.match(/\b(?:swap|trade|exchange)\s+(\d+(?:\.\d+)?)\s+([a-z0-9]+)\s+(?:to|for|into)\s+([a-z0-9]+)/i);
+  if (!match) return {};
+  return {
+    amount: match[1],
+    tokenIn: match[2].toUpperCase(),
+    tokenOut: match[3].toUpperCase(),
+  };
+}
+
+function extractYieldParams(message: string): Record<string, string> {
+  const match = message.match(/\b(?:supply|lend|deposit|withdraw|borrow|repay)\s+(\d+(?:\.\d+)?)\s+([a-z0-9]+)/i);
+  if (!match) return {};
+  return {
+    amount: match[1],
+    token: match[2].toUpperCase(),
+  };
+}
+
+function extractTransferParams(message: string): Record<string, string> {
+  const match = message.match(/\b(?:send|transfer)\s+(\d+(?:\.\d+)?)\s+([a-z0-9]+)?\s*(?:to)\s+(0x[a-fA-F0-9]{40})/i);
+  if (!match) return {};
+  const params: Record<string, string> = {
+    amount: match[1],
+    to: match[3],
+  };
+  if (match[2]) params.token = match[2].toUpperCase();
+  return params;
+}
+
+function extractBridgeParams(message: string): Record<string, string> {
+  const match = message.match(/\bbridge\s+(\d+(?:\.\d+)?)\s+([a-z0-9]+)/i);
+  if (!match) return {};
+  return {
+    amount: match[1],
+    token: match[2].toUpperCase(),
+  };
+}
+
+function fillMissingParams(
+  existing: Record<string, string>,
+  extracted: Record<string, string>,
+): Record<string, string> {
+  const merged = { ...existing };
+  for (const [key, value] of Object.entries(extracted)) {
+    if (!merged[key] && value) merged[key] = value;
+  }
+  return merged;
+}
+
+function shouldKeepPlan(message: string, decision: RouteDecision): boolean {
+  if (!decision.plan?.length) return false;
+  return /\b(then|after that|afterwards|and then)\b/i.test(message)
+    || /\band\s+(?:supply|deposit|lend|withdraw|borrow|repay|bridge|send|transfer|swap|trade|exchange|check|show|get)\b/i.test(message);
+}
+
+export function normalizeDecisionFromMessage(
+  message: string,
+  decision: RouteDecision,
+): RouteDecision {
+  const normalized: RouteDecision = {
+    ...decision,
+    params: { ...(decision.params || {}) },
+  };
+
+  if (!normalized.params.chain) {
+    const chain = extractChain(message);
+    if (chain) normalized.params.chain = chain;
+  }
+
+  switch (normalized.agent) {
+    case 'swap':
+      normalized.params = fillMissingParams(normalized.params, extractSwapParams(message));
+      break;
+    case 'yield':
+      normalized.params = fillMissingParams(normalized.params, extractYieldParams(message));
+      break;
+    case 'treasury':
+      if (normalized.intent === 'transfer') {
+        normalized.params = fillMissingParams(normalized.params, extractTransferParams(message));
+      }
+      break;
+    case 'bridge':
+      normalized.params = fillMissingParams(normalized.params, extractBridgeParams(message));
+      break;
+    default:
+      break;
+  }
+
+  if (!shouldKeepPlan(message, normalized)) {
+    normalized.plan = undefined;
+  }
+
+  return normalized;
+}
+
 /** Route only — returns the decision without executing */
 export async function analyzeMessage(
   userMessage: string,
@@ -97,6 +200,7 @@ export async function analyzeMessage(
   } catch {
     decision = fallbackRouting(userMessage);
   }
+  decision = normalizeDecisionFromMessage(userMessage, decision);
 
   // Handle unknown intent
   if (decision.agent === ('coordinator' as AgentName) && decision.intent === 'unknown') {
@@ -463,6 +567,7 @@ async function executePlan(
       stepDecision = fallbackRouting(stepDescription);
     }
 
+    stepDecision = normalizeDecisionFromMessage(stepDescription, stepDecision);
     stepDecision.plan = undefined;
 
     const stepResult = await executeWithRiskGate(stepDecision, userId);
