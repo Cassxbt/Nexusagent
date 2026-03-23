@@ -1,5 +1,5 @@
 import { config } from '../core/config.js';
-import { getOperatorAccount } from '../core/wdk-setup.js';
+import { getRuntimeAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, fromBaseUnits, resolveToken, getAavePoolAddress } from '../core/tokens.js';
 import { llmComplete } from '../reasoning/llm.js';
 import { logReasoning } from '../reasoning/logger.js';
@@ -445,7 +445,7 @@ async function recordSpending(
 /** Check if wallet has sufficient balance for the operation */
 async function checkBalance(token: string, amountUsdt: number, userId?: string): Promise<string | null> {
   try {
-    const account = await getOperatorAccount();
+    const account = await getRuntimeAccount('ethereum', userId);
 
     // Always check ETH for gas
     const ethBalance = await account.getBalance();

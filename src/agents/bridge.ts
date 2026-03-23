@@ -1,6 +1,6 @@
 import type Usdt0ProtocolEvm from '@tetherto/wdk-protocol-bridge-usdt0-evm';
 import { getAddress, isAddress } from 'ethers';
-import { getOperatorAccount, getAccount } from '../core/wdk-setup.js';
+import { getRuntimeAccount, getAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, parseAmount, fromBaseUnits } from '../core/tokens.js';
 import { logReasoning } from '../reasoning/logger.js';
 import type { Agent, AgentRequest, AgentResponse } from './types.js';
@@ -56,7 +56,7 @@ async function quoteBridge(
   });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const bridge = getBridge(account);
 
     const quote = await bridge.quoteBridge({
@@ -105,7 +105,7 @@ async function executeBridge(
   });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
 
     logReasoning({ agent: 'Bridge', action: 'approve', reasoning: `Approving USDT0 router to spend ${amount} USDT`, status: 'pass' });
     await account.approve({ token: validation.tokenAddress, spender: poolAddress, amount: validation.baseAmount });

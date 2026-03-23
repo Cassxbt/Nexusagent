@@ -1,5 +1,5 @@
 import type AaveProtocolEvm from '@tetherto/wdk-protocol-lending-aave-evm';
-import { getOperatorAccount, getAccount } from '../core/wdk-setup.js';
+import { getRuntimeAccount, getAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, parseAmount, fromBaseUnits, resolveToken, getAavePoolAddress } from '../core/tokens.js';
 import { llmComplete } from '../reasoning/llm.js';
 import { logReasoning } from '../reasoning/logger.js';
@@ -69,7 +69,7 @@ async function quoteSupply(chain = 'ethereum', token: string, amount: string, us
   logReasoning({ agent: 'Yield', action: 'quoteSupply', reasoning: `Quoting supply of ${amount} ${token} to Aave V3`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = account.getLendingProtocol('aave');
     const quote = await lending.quoteSupply({ token: resolved.tokenAddress, amount: resolved.baseAmount });
 
@@ -100,7 +100,7 @@ async function supply(chain = 'ethereum', token: string, amount: string, userId?
   logReasoning({ agent: 'Yield', action: 'supply', reasoning: `Supplying ${amount} ${token} to Aave V3 on ${chain}`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
 
     logReasoning({ agent: 'Yield', action: 'approve', reasoning: `Approving Aave Pool to spend ${amount} ${token}`, status: 'pass' });
     await account.approve({ token: resolved.tokenAddress, spender: poolAddress, amount: resolved.baseAmount });
@@ -128,7 +128,7 @@ async function quoteWithdraw(chain = 'ethereum', token: string, amount: string, 
   if (!resolved.ok) return { success: false, message: resolved.error };
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = account.getLendingProtocol('aave');
     const quote = await lending.quoteWithdraw({ token: resolved.tokenAddress, amount: resolved.baseAmount });
 
@@ -151,7 +151,7 @@ async function withdraw(chain = 'ethereum', token: string, amount: string, userI
   logReasoning({ agent: 'Yield', action: 'withdraw', reasoning: `Withdrawing ${amount} ${token} from Aave V3`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = account.getLendingProtocol('aave');
     const result = await lending.withdraw({ token: resolved.tokenAddress, amount: resolved.baseAmount });
 
@@ -179,7 +179,7 @@ async function quoteBorrow(chain = 'ethereum', token: string, amount: string, us
   logReasoning({ agent: 'Yield', action: 'quoteBorrow', reasoning: `Quoting borrow of ${amount} ${token} from Aave V3`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = getLending(account);
     const quote = await lending.quoteBorrow({ token: resolved.tokenAddress, amount: resolved.baseAmount });
 
@@ -207,7 +207,7 @@ async function borrow(chain = 'ethereum', token: string, amount: string, rateMod
   logReasoning({ agent: 'Yield', action: 'borrow', reasoning: `Borrowing ${amount} ${token} from Aave V3 (rate mode: ${rateMode === '1' ? 'stable' : 'variable'})`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = getLending(account);
     const result = await lending.borrow({
       token: resolved.tokenAddress,
@@ -234,7 +234,7 @@ async function quoteRepay(chain = 'ethereum', token: string, amount: string, use
   if (!resolved.ok) return { success: false, message: resolved.error };
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = getLending(account);
     const quote = await lending.quoteRepay({ token: resolved.tokenAddress, amount: resolved.baseAmount });
 
@@ -262,7 +262,7 @@ async function repay(chain = 'ethereum', token: string, amount: string, rateMode
   logReasoning({ agent: 'Yield', action: 'repay', reasoning: `Repaying ${amount} ${token} to Aave V3`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
 
     await account.approve({ token: resolved.tokenAddress, spender: poolAddress, amount: resolved.baseAmount });
     logReasoning({ agent: 'Yield', action: 'approve', reasoning: 'Approval for repay confirmed', status: 'pass' });
@@ -290,7 +290,7 @@ async function accountData(chain = 'ethereum', userId?: string): Promise<AgentRe
   logReasoning({ agent: 'Yield', action: 'accountData', reasoning: `Fetching Aave V3 account data on ${chain}`, status: 'pass' });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const lending = getLending(account);
     const data = await lending.getAccountData();
 

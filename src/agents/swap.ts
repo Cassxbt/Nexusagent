@@ -1,9 +1,89 @@
-import { getOperatorAccount } from '../core/wdk-setup.js';
+import { constructSimpleSDK } from '@velora-dex/sdk';
+import { getRuntimeAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, parseAmount, fromBaseUnits, resolveToken } from '../core/tokens.js';
 import { logReasoning } from '../reasoning/logger.js';
 import { pricing } from '../core/pricing.js';
 import { config } from '../core/config.js';
 import type { Agent, AgentRequest, AgentResponse } from './types.js';
+
+const NATIVE_ETH = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+const APPROVAL_WAIT_TIMEOUT_MS = 45_000;
+const APPROVAL_WAIT_POLL_MS = 1_500;
+
+function getChainId(chain: string): number {
+  const normalized = chain === 'arbitrum' ? 'ethereum' : chain;
+  return config.chains[normalized as keyof typeof config.chains]?.chainId ?? 42161;
+}
+
+function isNativeTokenAddress(address: string): boolean {
+  return address.toLowerCase() === NATIVE_ETH.toLowerCase();
+}
+
+async function getVeloraSdk(chain: string) {
+  return constructSimpleSDK({
+    fetch,
+    chainId: getChainId(chain),
+  });
+}
+
+async function ensureVeloraApproval(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  account: any,
+  chain: string,
+  tokenInAddress: string,
+  amount: bigint,
+): Promise<{ approved: boolean; spender: string | null }> {
+  if (isNativeTokenAddress(tokenInAddress)) {
+    return { approved: false, spender: null };
+  }
+
+  const sdk = await getVeloraSdk(chain);
+  const spender = await sdk.swap.getSpender();
+  const allowance = await account.getAllowance(tokenInAddress, spender);
+
+  if (allowance >= amount) {
+    return { approved: false, spender };
+  }
+
+  const approvalTx = await account.approve({
+    token: tokenInAddress,
+    spender,
+    amount,
+  });
+
+  const startedAt = Date.now();
+  while ((Date.now() - startedAt) < APPROVAL_WAIT_TIMEOUT_MS) {
+    const receipt = await account.getTransactionReceipt(approvalTx.hash);
+    if (receipt) {
+      return { approved: true, spender };
+    }
+    await new Promise((resolve) => setTimeout(resolve, APPROVAL_WAIT_POLL_MS));
+  }
+
+  throw new Error('Approval transaction was sent but not confirmed in time. Try again once the approval is mined.');
+}
+
+async function getVeloraRate(
+  chain: string,
+  tokenInAddress: string,
+  tokenOutAddress: string,
+  amount: bigint,
+  userAddress: string,
+) {
+  const sdk = await getVeloraSdk(chain);
+  const rate = await sdk.swap.getRate({
+    srcToken: tokenInAddress,
+    destToken: tokenOutAddress,
+    amount: amount.toString(),
+    userAddress,
+    side: 'SELL',
+  });
+
+  return {
+    tokenInAmount: BigInt(rate.srcAmount),
+    tokenOutAmount: BigInt(rate.destAmount),
+  };
+}
 
 export const swapAgent: Agent = {
   name: 'swap',
@@ -55,14 +135,35 @@ async function quoteSwap(
   });
 
   try {
-    const account = await getOperatorAccount(chain);
+    const account = await getRuntimeAccount(chain, userId);
     const swap = account.getSwapProtocol('velora');
+    const address = await account.getAddress();
+    let quote;
+    try {
+      quote = await swap.quoteSwap({
+        tokenIn: tokenInAddress,
+        tokenOut: tokenOutAddress,
+        tokenInAmount: baseAmount,
+      });
+    } catch (err) {
+      if (!/estimateGas|CALL_EXCEPTION|missing revert data/i.test(err instanceof Error ? err.message : String(err))) {
+        throw err;
+      }
 
-    const quote = await swap.quoteSwap({
-      tokenIn: tokenInAddress,
-      tokenOut: tokenOutAddress,
-      tokenInAmount: baseAmount,
-    });
+      const fallback = await getVeloraRate(chain, tokenInAddress, tokenOutAddress, baseAmount, address);
+      quote = {
+        tokenInAmount: fallback.tokenInAmount,
+        tokenOutAmount: fallback.tokenOutAmount,
+        fee: 0n,
+      };
+
+      logReasoning({
+        agent: 'Swap',
+        action: 'quoteSwap',
+        reasoning: 'Exact fee quote unavailable before token approval — using Velora rate fallback',
+        status: 'warn',
+      });
+    }
 
     const inToken = resolveToken(tokenIn, chain);
     const outToken = resolveToken(tokenOut, chain);
@@ -73,7 +174,7 @@ async function quoteSwap(
       `Swap Quote: ${tokenIn} -> ${tokenOut}`,
       `Input: ${readableIn} ${tokenIn}`,
       `Output: ${readableOut} ${tokenOut}`,
-      `Fee: ${fromBaseUnits(quote.fee, 18)} ETH`,
+      `Fee: ${quote.fee > 0n ? `${fromBaseUnits(quote.fee, 18)} ETH` : 'estimated on execution after approval'}`,
     ].join('\n');
 
     logReasoning({
@@ -120,8 +221,8 @@ async function executeSwap(
   const baseAmount = parseAmount(amount, tokenIn, chain);
   if (baseAmount === null) return { success: false, message: `Invalid amount: ${amount}` };
 
-  const account = await getOperatorAccount(chain);
-  const swap = account.getSwapProtocol('velora');
+    const account = await getRuntimeAccount(chain, userId);
+    const swap = account.getSwapProtocol('velora');
 
   // Quote first — surface expected output and check price impact before committing.
   const inToken = resolveToken(tokenIn, chain);
@@ -131,6 +232,17 @@ async function executeSwap(
   let priceImpactPct: number | null = null;
 
   try {
+    const approval = await ensureVeloraApproval(account, chain, tokenInAddress, baseAmount);
+    if (approval.approved) {
+      logReasoning({
+        agent: 'Swap',
+        action: 'approve',
+        reasoning: `Approved Velora spender for ${amount} ${tokenIn}`,
+        result: `spender: ${approval.spender}`,
+        status: 'pass',
+      });
+    }
+
     const quote = await swap.quoteSwap({
       tokenIn: tokenInAddress,
       tokenOut: tokenOutAddress,
