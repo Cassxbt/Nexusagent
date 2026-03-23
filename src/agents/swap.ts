@@ -1,4 +1,4 @@
-import { getAccount } from '../core/wdk-setup.js';
+import { getOperatorAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, parseAmount, fromBaseUnits, resolveToken } from '../core/tokens.js';
 import { logReasoning } from '../reasoning/logger.js';
 import { pricing } from '../core/pricing.js';
@@ -55,7 +55,7 @@ async function quoteSwap(
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
     const swap = account.getSwapProtocol('velora');
 
     const quote = await swap.quoteSwap({
@@ -120,7 +120,7 @@ async function executeSwap(
   const baseAmount = parseAmount(amount, tokenIn, chain);
   if (baseAmount === null) return { success: false, message: `Invalid amount: ${amount}` };
 
-  const account = await getAccount(chain, { userId });
+  const account = await getOperatorAccount(chain);
   const swap = account.getSwapProtocol('velora');
 
   // Quote first — surface expected output and check price impact before committing.

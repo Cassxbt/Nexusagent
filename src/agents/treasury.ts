@@ -1,4 +1,4 @@
-import { getAccount } from '../core/wdk-setup.js';
+import { getOperatorAccount } from '../core/wdk-setup.js';
 import { resolveTokenOrAddress, parseAmount, isAddress, fromBaseUnits, resolveToken } from '../core/tokens.js';
 import { logReasoning } from '../reasoning/logger.js';
 import type { Agent, AgentRequest, AgentResponse } from './types.js';
@@ -40,7 +40,7 @@ async function getBalance(chain: string = 'ethereum', userId?: string): Promise<
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
     const balance = await account.getBalance();
     const readable = fromBaseUnits(balance, 18);
 
@@ -70,7 +70,7 @@ async function getAddress(chain: string = 'ethereum', userId?: string): Promise<
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
     const address = await account.getAddress();
 
     return {
@@ -103,7 +103,7 @@ async function getTokenBalance(
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
     const balance = await account.getTokenBalance(tokenAddress);
     const token = resolveToken(symbol, chain);
     const readable = fromBaseUnits(balance, token?.decimals ?? 18);
@@ -141,7 +141,7 @@ async function transfer(
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
 
     if (tokenSymbol) {
       const tokenAddress = resolveTokenOrAddress(tokenSymbol, chain);
@@ -208,7 +208,7 @@ async function estimateFee(
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
     const baseAmount = parseAmount(amount || '0', 'ETH', chain);
     const quote = await account.quoteSendTransaction({ to, value: baseAmount ?? 0n });
 

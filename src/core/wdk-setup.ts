@@ -51,11 +51,19 @@ export function getWdk(): InstanceType<typeof WDK> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// WDK only registers the 'ethereum' key (pointing to Arbitrum One).
+// Normalize any Arbitrum alias so callers can say "arbitrum" naturally.
+function normalizeChain(chain: string): string {
+  if (chain === 'arbitrum' || chain === 'arbitrum one' || chain === 'arb') return 'ethereum';
+  return chain;
+}
+
 export async function getAccount(
   chain: string = 'ethereum',
   opts: number | { index?: number; userId?: string } = 0,
 ): Promise<any> {
   const wdk = getWdk();
+  chain = normalizeChain(chain);
 
   if (typeof opts === 'number') {
     return wdk.getAccount(chain, opts);

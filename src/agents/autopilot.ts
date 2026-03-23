@@ -1,5 +1,5 @@
 import type AaveProtocolEvm from '@tetherto/wdk-protocol-lending-aave-evm';
-import { getAccount } from '../core/wdk-setup.js';
+import { getOperatorAccount } from '../core/wdk-setup.js';
 import { resolveTokenAddress, fromBaseUnits } from '../core/tokens.js';
 import { logReasoning, setActiveUser } from '../reasoning/logger.js';
 import { pricing } from '../core/pricing.js';
@@ -298,7 +298,7 @@ async function runUserAutopilotCycle(userId: string, cfg: AutopilotConfig): Prom
   let cycleUsdtBal = 0;
   let cycleHealthFactor: number | undefined;
   try {
-    const account = await getAccount('ethereum', { userId });
+    const account = await getOperatorAccount();
     const ethRaw = await account.getBalance();
     const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
     const usdtRaw = usdtAddr ? await account.getTokenBalance(usdtAddr) : 0n;
@@ -396,7 +396,7 @@ async function runUserAutopilotCycle(userId: string, cfg: AutopilotConfig): Prom
 
 async function checkHealthFactor(userId: string, cfg: AutopilotConfig, walletUsdtBal: number): Promise<string | null> {
   try {
-    const account = await getAccount('ethereum', { userId });
+    const account = await getOperatorAccount();
     const lending = account.getLendingProtocol('aave') as unknown as InstanceType<typeof AaveProtocolEvm>;
     const data = await lending.getAccountData();
 
@@ -483,7 +483,7 @@ async function checkBalanceDrift(userId: string, cfg: AutopilotConfig): Promise<
   if (!lastSnapshot) return null;
 
   try {
-    const account = await getAccount('ethereum', { userId });
+    const account = await getOperatorAccount();
     const ethBalance = await account.getBalance();
 
     const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
@@ -526,7 +526,7 @@ async function checkBalanceDrift(userId: string, cfg: AutopilotConfig): Promise<
 
 async function checkGasConditions(userId: string): Promise<string | null> {
   try {
-    const account = await getAccount('ethereum', { userId });
+    const account = await getOperatorAccount();
     const ethBalance = await account.getBalance();
     const ethReadable = fromBaseUnits(ethBalance, 18);
     const ethAmt = parseFloat(ethReadable);
@@ -629,7 +629,7 @@ async function applyTreasuryPolicy(userId: string): Promise<string[]> {
   const xautAddr = resolveTokenAddress('XAUT', 'ethereum');
   if (!usdtAddr || !xautAddr) return [];
 
-  const account = await getAccount('ethereum', { userId });
+  const account = await getOperatorAccount();
   const usdtBalance = await account.getTokenBalance(usdtAddr);
   const xautBalance = await account.getTokenBalance(xautAddr);
   const usdtAmount = parseFloat(fromBaseUnits(usdtBalance, 6));
@@ -765,7 +765,7 @@ async function applyTreasuryPolicy(userId: string): Promise<string[]> {
 
 async function takeSnapshot(userId: string): Promise<void> {
   try {
-    const account = await getAccount('ethereum', { userId });
+    const account = await getOperatorAccount();
     const ethBalance = await account.getBalance();
     const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
     const usdtBalance = usdtAddr ? await account.getTokenBalance(usdtAddr) : 0n;

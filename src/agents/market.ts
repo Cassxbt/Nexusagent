@@ -1,4 +1,4 @@
-import { getAccount } from '../core/wdk-setup.js';
+import { getOperatorAccount } from '../core/wdk-setup.js';
 import { fromBaseUnits, resolveTokenAddress, resolveToken, ARBITRUM_TOKEN_LIST } from '../core/tokens.js';
 import { llmComplete } from '../reasoning/llm.js';
 import { logReasoning } from '../reasoning/logger.js';
@@ -187,7 +187,7 @@ async function portfolioSummary(chain: string = 'ethereum', userId?: string): Pr
   });
 
   try {
-    const account = await getAccount(chain, { userId });
+    const account = await getOperatorAccount(chain);
     const address = await account.getAddress();
     const nativeBalance = await account.getBalance();
     const readableEth = fromBaseUnits(nativeBalance, 18);
