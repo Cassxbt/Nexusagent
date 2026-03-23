@@ -35,7 +35,7 @@ const ROUTING_PROMPT = `You are Nexus, an autonomous treasury coordinator on Arb
 
 Available agents:
 - treasury: wallet operations (balance, address, transfers, fees)
-- market: price data, portfolio analysis, market conditions
+- market: price data, portfolio analysis, portfolio risk review, market conditions
 - swap: token swaps via Velora DEX
 - yield: Aave V3 lending (supply, withdraw, borrow, repay)
 - risk: transaction validation, spending limits, exposure checks
@@ -51,7 +51,7 @@ Respond with JSON:
 
 Intent values per agent:
 - treasury: get_balance, get_address, get_token_balance, transfer, estimate_fee
-- market: get_price, get_history, portfolio_summary, market_conditions, get_premium_intel
+- market: get_price, get_history, portfolio_summary, assess_portfolio, market_conditions, get_premium_intel
 - swap: quote_swap, execute_swap
 - yield: quote_supply, supply, quote_withdraw, withdraw, account_data, quote_borrow, borrow, quote_repay, repay
 - risk: check_transaction, get_limits, set_limits, assess_risk, get_guard_params
@@ -495,7 +495,7 @@ async function executePlan(
   };
 }
 
-function fallbackRouting(message: string): RouteDecision {
+export function fallbackRouting(message: string): RouteDecision {
   const lower = message.toLowerCase();
 
   if (lower.includes('balance') || lower.includes('how much')) {
@@ -520,6 +520,14 @@ function fallbackRouting(message: string): RouteDecision {
 
   if (lower.includes('price') || lower.includes('worth')) {
     return { agent: 'market' as AgentName, intent: 'get_price', params: {} };
+  }
+
+  if (
+    (lower.includes('portfolio') && (lower.includes('worry') || lower.includes('worried') || lower.includes('safe') || lower.includes('analy') || lower.includes('assess') || lower.includes('review')))
+    || lower.includes('should i be worried')
+    || lower.includes('is my treasury safe')
+  ) {
+    return { agent: 'market' as AgentName, intent: 'assess_portfolio', params: {} };
   }
 
   if (lower.includes('portfolio')) {

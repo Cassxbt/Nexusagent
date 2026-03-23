@@ -293,7 +293,7 @@ It does **not** yet include a full live WDK integration test suite against funde
 These limitations are current, intentional, and important:
 
 1. **Execution authority**: wallet login authenticates the user, but autonomous execution still uses WDK-managed strategy accounts derived from the server seed.
-2. **Public-surface hardening**: some demo and diagnostics routes are still more permissive than a production internet-facing deployment should be.
+2. **Judge demo exposure**: Judge Demo intentionally mirrors the funded server treasury in read-only mode. For a production internet-facing deployment, expose a separate showcase account or tighten visibility further.
 3. **Bridge scope**: bridge support is limited to the currently wired USDT0 path and supported EVM chains.
 4. **Data dependency risk**: regime posture relies on external market data and degrades when those inputs are stale or unavailable.
 5. **No full production test harness yet**: tests are meaningful, but capital deployment should still be treated cautiously until live funded integration coverage is expanded.
@@ -308,3 +308,5 @@ These limitations are current, intentional, and important:
 ## License
 
 Apache-2.0
+
+Built with love by [Cassxbt](https://x.com/cassxbt).

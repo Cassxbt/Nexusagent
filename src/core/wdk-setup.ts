@@ -5,6 +5,7 @@ import Usdt0Protocol from '@tetherto/wdk-protocol-bridge-usdt0-evm';
 import WalletManagerEvm from '@tetherto/wdk-wallet-evm';
 import WalletManagerEvmErc4337 from '@tetherto/wdk-wallet-evm-erc-4337';
 import { getOrCreateUserAccountContext } from './account-context.js';
+import { getUserAccountContext } from './account-context.js';
 import { config } from './config.js';
 
 let wdkInstance: InstanceType<typeof WDK> | null = null;
@@ -83,6 +84,23 @@ export async function getAccount(
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getOperatorAccount(chain: string = 'ethereum'): Promise<any> {
   return getAccount(chain, OPERATOR_ACCOUNT_INDEX);
+}
+
+// Runtime account resolution for the current product model:
+// - wallet-linked users use their mapped WDK account context
+// - guests, demo viewers, Telegram-only users, and legacy operator flows stay on the server treasury
+// This keeps the live funded demo stable while preserving user-specific account contexts when they exist.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function getRuntimeAccount(chain: string = 'ethereum', userId?: string): Promise<any> {
+  chain = normalizeChain(chain);
+  if (!userId) return getOperatorAccount(chain);
+
+  const context = getUserAccountContext(userId, chain);
+  if (!context?.ownerAddress && !context?.smartAccountAddress) {
+    return getOperatorAccount(chain);
+  }
+
+  return getAccount(chain, { userId });
 }
 
 export function isErc4337Mode(): boolean {

@@ -679,7 +679,7 @@
       <div class="stat-chip-sub" id="stat-autopilot-meta">loading…</div>
     </div>
     <div class="stat-bar-actions">
-      <button class="bar-btn" id="dashboard-current-btn">My Treasury</button>
+      <button class="bar-btn" id="dashboard-current-btn">Wallet View</button>
       <button class="bar-btn" id="dashboard-demo-btn">Judge Demo</button>
       <button class="bar-btn" id="dashboard-toggle-btn">Dashboard ▾</button>
       <button class="bar-btn" id="dashboard-refresh-btn">Refresh</button>
@@ -746,10 +746,10 @@
     <div>
       <div class="section-label">session</div>
       <div class="wallet-card">
-        <div class="auth-status" id="auth-status">Guest session</div>
-        <div class="wallet-address" id="auth-address">Not signed in</div>
+        <div class="auth-status" id="auth-status">No wallet session</div>
+        <div class="wallet-address" id="auth-address">Operator treasury in read-only mode</div>
         <div class="auth-actions">
-          <button class="btn btn-secondary" id="connect-wallet-btn">Connect Wallet</button>
+          <button class="btn btn-secondary" id="connect-wallet-btn">Connect Wallet (optional)</button>
           <button class="btn btn-cancel" id="logout-btn" style="display:none">Logout</button>
         </div>
       </div>
@@ -933,10 +933,10 @@ Ask me anything, or click a quick command on the left.</div>
       logoutBtn.style.display = 'inline-flex';
       return;
     }
-    authStatusEl.textContent = 'Guest session';
-    authAddressEl.textContent = 'Not signed in';
+    authStatusEl.textContent = 'No wallet session';
+    authAddressEl.textContent = 'Operator treasury in read-only mode';
     authAddressEl.title = '';
-    connectWalletBtn.textContent = 'Connect Wallet';
+    connectWalletBtn.textContent = 'Connect Wallet (optional)';
     logoutBtn.style.display = 'none';
   }
 
@@ -991,7 +991,7 @@ Ask me anything, or click a quick command on the left.</div>
       persistAuthState(verifyData.session);
       dashboardView = 'current';
       refreshDashboard('current');
-      appendMessage('assistant', `Wallet authenticated: ${address.slice(0, 8)}...${address.slice(-6)}`);
+      appendMessage('assistant', `Wallet authenticated: ${address.slice(0, 8)}...${address.slice(-6)}. Wallet View now shows the mapped WDK account; Judge Demo stays on the read-only server treasury.`);
     } catch (err) {
       appendMessage('error', `Wallet connection failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1001,7 +1001,7 @@ Ask me anything, or click a quick command on the left.</div>
     clearAuthState();
     dashboardView = 'demo';
     refreshDashboard('demo');
-    appendMessage('assistant', 'Signed out. Viewing demo data.');
+    appendMessage('assistant', 'Signed out. Back to Judge Demo, which mirrors the live server treasury in read-only mode.');
   }
 
   function connect() {
@@ -1054,7 +1054,7 @@ Ask me anything, or click a quick command on the left.</div>
 
     // Stat bar
     document.getElementById('stat-total').textContent   = formatCurrency(balances.totalUsdValue);
-    document.getElementById('stat-view').textContent    = dashboard.view === 'demo' ? 'demo' : 'live';
+    document.getElementById('stat-view').textContent    = dashboard.view === 'demo' ? 'read-only' : 'wallet';
     document.getElementById('stat-reserve').textContent = formatCurrency(balances.usdt);
     document.getElementById('stat-reserve-meta').textContent = `${formatPercent(balances.reservePct)} of portfolio`;
     document.getElementById('stat-xaut').textContent    = formatCurrency(balances.xautUsdValue);
@@ -1086,7 +1086,7 @@ Ask me anything, or click a quick command on the left.</div>
       hfText,
     ].join(' · ');
     document.getElementById('chat-summary').textContent = dashboard.view === 'demo'
-      ? 'Read-only demo treasury. Live execution is disabled in this view.'
+      ? 'Judge Demo mirrors the funded server treasury in read-only mode. Ask questions freely; execution is disabled here.'
       : execution.limitation || execution.model || '';
 
     // Dashboard section (only if open)
@@ -1143,7 +1143,7 @@ Ask me anything, or click a quick command on the left.</div>
         </div>
       </div>
     `;
-    policyStatusEl.textContent = readOnly ? (dashboard.view === 'demo' ? 'Read-only in demo mode.' : 'Connect wallet to edit.') : '';
+    policyStatusEl.textContent = readOnly ? (dashboard.view === 'demo' ? 'Read-only mirror of the server treasury.' : 'Connect wallet to edit.') : '';
     policySaveBtn.disabled = readOnly;
 
     const receiptListEl = document.getElementById('receipt-list');
@@ -1221,7 +1221,7 @@ Ask me anything, or click a quick command on the left.</div>
     try {
       dashboardView = 'demo';
       await refreshDashboard('demo');
-      appendMessage('assistant', 'Judge demo loaded. Demo mode is read-only and safe to inspect.');
+      appendMessage('assistant', 'Judge Demo loaded. This is a read-only mirror of the funded server treasury.');
     } catch (err) {
       appendMessage('error', `Demo snapshot failed: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -1,5 +1,5 @@
 import type AaveProtocolEvm from '@tetherto/wdk-protocol-lending-aave-evm';
-import { getOperatorAccount } from '../core/wdk-setup.js';
+import { getRuntimeAccount } from '../core/wdk-setup.js';
 import { resolveTokenAddress, fromBaseUnits } from '../core/tokens.js';
 import { logReasoning, setActiveUser } from '../reasoning/logger.js';
 import { pricing } from '../core/pricing.js';
@@ -45,6 +45,16 @@ let stateLoaded = false;
 const baselineApyByUser = new Map<string, number | null>();
 const lastSnapshotByUser = new Map<string, PortfolioSnapshot | null>();
 const DEMO_USER_ID = process.env.NEXUS_DEMO_USER_ID || 'demo';
+const ALERT_COOLDOWN_MS: Record<string, number> = {
+  gas_low: 60 * 60 * 1000,
+  gas_critical: 15 * 60 * 1000,
+  health_warn: 30 * 60 * 1000,
+  health_critical: 15 * 60 * 1000,
+  balance_drift: 30 * 60 * 1000,
+  apy_drop: 30 * 60 * 1000,
+  treasury_action: 0,
+  generic: 15 * 60 * 1000,
+};
 
 /** Register an additional alert channel (e.g. WebSocket broadcast) */
 export function addAlertChannel(fn: (userId: string, message: string) => Promise<void>): void {
@@ -113,6 +123,53 @@ function baselineKey(userId: string): string {
 
 function snapshotKey(userId: string): string {
   return `autopilot:${userId}:last_snapshot`;
+}
+
+function alertStateKey(userId: string, kind: string): string {
+  return `autopilot:${userId}:last_alert:${kind}`;
+}
+
+function classifyAlertKind(alert: string): string {
+  if (alert.startsWith('🚨 *CRITICAL: Aave health factor')) return 'health_critical';
+  if (alert.startsWith('⚠️ *Aave health factor')) return 'health_warn';
+  if (alert.startsWith('⛽ *Low ETH for gas')) return 'gas_critical';
+  if (alert.startsWith('⛽ *Low ETH balance')) return 'gas_low';
+  if (alert.startsWith('📊 *')) return 'balance_drift';
+  if (alert.startsWith('📉 *Aave USDT yield dropped')) return 'apy_drop';
+  if (alert.startsWith('📌 *Treasury Policy Action*')) return 'treasury_action';
+  return 'generic';
+}
+
+interface AlertState {
+  kind: string;
+  message: string;
+  sentAt: number;
+}
+
+export function shouldSendAutopilotAlert(userId: string, alert: string, nowMs: number = Date.now()): boolean {
+  const kind = classifyAlertKind(alert);
+  const cooldownMs = ALERT_COOLDOWN_MS[kind] ?? ALERT_COOLDOWN_MS.generic;
+  const key = alertStateKey(userId, kind);
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT value
+    FROM autopilot_state
+    WHERE key = ?
+  `).get(key) as { value: string } | undefined;
+
+  if (row) {
+    try {
+      const state = JSON.parse(row.value) as AlertState;
+      if (state.message === alert && (nowMs - state.sentAt) < cooldownMs) {
+        return false;
+      }
+    } catch {
+      // ignore malformed persisted state
+    }
+  }
+
+  persistState(key, { kind, message: alert, sentAt: nowMs });
+  return true;
 }
 
 function loadPersistedState(): void {
@@ -298,7 +355,7 @@ async function runUserAutopilotCycle(userId: string, cfg: AutopilotConfig): Prom
   let cycleUsdtBal = 0;
   let cycleHealthFactor: number | undefined;
   try {
-    const account = await getOperatorAccount();
+    const account = await getRuntimeAccount('ethereum', userId);
     const ethRaw = await account.getBalance();
     const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
     const usdtRaw = usdtAddr ? await account.getTokenBalance(usdtAddr) : 0n;
@@ -391,12 +448,12 @@ async function runUserAutopilotCycle(userId: string, cfg: AutopilotConfig): Prom
   }
 
   await takeSnapshot(userId);
-  return alerts;
+  return alerts.filter((alert) => shouldSendAutopilotAlert(userId, alert));
 }
 
 async function checkHealthFactor(userId: string, cfg: AutopilotConfig, walletUsdtBal: number): Promise<string | null> {
   try {
-    const account = await getOperatorAccount();
+    const account = await getRuntimeAccount('ethereum', userId);
     const lending = account.getLendingProtocol('aave') as unknown as InstanceType<typeof AaveProtocolEvm>;
     const data = await lending.getAccountData();
 
@@ -483,7 +540,7 @@ async function checkBalanceDrift(userId: string, cfg: AutopilotConfig): Promise<
   if (!lastSnapshot) return null;
 
   try {
-    const account = await getOperatorAccount();
+    const account = await getRuntimeAccount('ethereum', userId);
     const ethBalance = await account.getBalance();
 
     const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
@@ -526,7 +583,7 @@ async function checkBalanceDrift(userId: string, cfg: AutopilotConfig): Promise<
 
 async function checkGasConditions(userId: string): Promise<string | null> {
   try {
-    const account = await getOperatorAccount();
+    const account = await getRuntimeAccount('ethereum', userId);
     const ethBalance = await account.getBalance();
     const ethReadable = fromBaseUnits(ethBalance, 18);
     const ethAmt = parseFloat(ethReadable);
@@ -629,7 +686,7 @@ async function applyTreasuryPolicy(userId: string): Promise<string[]> {
   const xautAddr = resolveTokenAddress('XAUT', 'ethereum');
   if (!usdtAddr || !xautAddr) return [];
 
-  const account = await getOperatorAccount();
+  const account = await getRuntimeAccount('ethereum', userId);
   const usdtBalance = await account.getTokenBalance(usdtAddr).catch(() => 0n);
   const xautBalance = await account.getTokenBalance(xautAddr).catch(() => 0n);
   const usdtAmount = parseFloat(fromBaseUnits(usdtBalance, 6));
@@ -765,7 +822,7 @@ async function applyTreasuryPolicy(userId: string): Promise<string[]> {
 
 async function takeSnapshot(userId: string): Promise<void> {
   try {
-    const account = await getOperatorAccount();
+    const account = await getRuntimeAccount('ethereum', userId);
     const ethBalance = await account.getBalance();
     const usdtAddr = resolveTokenAddress('USDT', 'ethereum');
     const usdtBalance = usdtAddr ? await account.getTokenBalance(usdtAddr) : 0n;

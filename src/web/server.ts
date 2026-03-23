@@ -202,8 +202,23 @@ async function getWalletData(userId: string): Promise<WalletData> {
   }
 }
 
+async function getOperatorWalletData(): Promise<WalletData> {
+  try {
+    const { getOperatorAccount, isErc4337Mode } = await import('../core/wdk-setup.js');
+    const account = await getOperatorAccount('ethereum');
+    const address = await account.getAddress();
+    return {
+      address,
+      chainName: 'Arbitrum One',
+      mode: isErc4337Mode() ? 'ERC-4337' : 'EOA',
+    };
+  } catch {
+    return { address: 'unavailable', chainName: 'Arbitrum One', mode: 'unknown' };
+  }
+}
+
 async function buildDashboardState(userId: string, view: 'current' | 'demo') {
-  const [{ getAccount }, { fromBaseUnits, resolveTokenAddress }, { pricing }, { getFearGreedSignal, getGoldSignal }, { getOrCreateTreasuryPolicy }, { isAutopilotRunning }] = await Promise.all([
+  const [{ getAccount, getOperatorAccount }, { fromBaseUnits, resolveTokenAddress }, { pricing }, { getFearGreedSignal, getGoldSignal }, { getOrCreateTreasuryPolicy }, { isAutopilotRunning }] = await Promise.all([
     import('../core/wdk-setup.js'),
     import('../core/tokens.js'),
     import('../core/pricing.js'),
@@ -212,8 +227,12 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     import('../agents/autopilot.js'),
   ]);
 
-  const account = await getAccount('ethereum', { userId });
-  const wallet = await getWalletData(userId);
+  const account = view === 'demo'
+    ? await getOperatorAccount('ethereum')
+    : await getAccount('ethereum', { userId });
+  const wallet = view === 'demo'
+    ? await getOperatorWalletData()
+    : await getWalletData(userId);
   const accountContext = getUserAccountContext(userId, 'ethereum');
   const ethRaw = await account.getBalance();
   const wethAddr = resolveTokenAddress('WETH', 'ethereum');
@@ -260,13 +279,20 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     expectedCycleMs: 5 * 60 * 1000,
   });
   const db = getDb();
-  const txRows = db.prepare(`
-    SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
-    FROM tx_log
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-    LIMIT 8
-  `).all(userId) as Array<Record<string, unknown>>;
+  const txRows = (view === 'demo'
+    ? db.prepare(`
+        SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
+        FROM tx_log
+        ORDER BY created_at DESC
+        LIMIT 8
+      `).all()
+    : db.prepare(`
+        SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
+        FROM tx_log
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 8
+      `).all(userId)) as Array<Record<string, unknown>>;
 
   const receipts = txRows.map((tx) => {
     let parsedMetadata: Record<string, unknown> | null = null;
@@ -292,13 +318,21 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     };
   });
 
-  const x402Rows = db.prepare(`
-    SELECT amount_usdt, tx_hash, status, created_at
-    FROM tx_log
-    WHERE user_id = ? AND intent = 'x402_payment'
-    ORDER BY created_at DESC
-    LIMIT 5
-  `).all(userId) as Array<Record<string, unknown>>;
+  const x402Rows = (view === 'demo'
+    ? db.prepare(`
+        SELECT amount_usdt, tx_hash, status, created_at
+        FROM tx_log
+        WHERE intent = 'x402_payment'
+        ORDER BY created_at DESC
+        LIMIT 5
+      `).all()
+    : db.prepare(`
+        SELECT amount_usdt, tx_hash, status, created_at
+        FROM tx_log
+        WHERE user_id = ? AND intent = 'x402_payment'
+        ORDER BY created_at DESC
+        LIMIT 5
+      `).all(userId)) as Array<Record<string, unknown>>;
 
   const regime = {
     fearGreedValue: fearGreed.value,
@@ -326,15 +360,15 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
       ownerAddress: accountContext?.ownerAddress ?? null,
       strategyAddress: wallet.address,
       model: view === 'demo'
-        ? 'Read-only demo treasury'
+        ? 'Read-only mirror of the live server treasury'
         : accountContext?.ownerAddress
           ? 'Wallet-authenticated identity + Nexus-managed WDK strategy account'
-          : 'Nexus-managed WDK strategy account',
+          : 'Live server treasury',
       limitation: view === 'demo'
-        ? 'Demo mode is inspect-only.'
+        ? 'Judge Demo is inspect-only. It mirrors the funded server treasury without exposing write access.'
         : accountContext?.ownerAddress
           ? 'The connected wallet authenticates the user. Execution currently runs from the mapped WDK strategy account.'
-          : 'Execution is currently strategy-account based.',
+          : 'Autopilot and execution currently run from the funded server treasury.',
     },
     heartbeat,
     balances: {
@@ -356,7 +390,7 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     receipts,
     x402Payments: x402Rows,
     sourceHealth: heartbeat.sources,
-    reasoning: getReasoningLog(userId),
+    reasoning: getReasoningLog(view === 'demo' ? 'autopilot' : userId),
   };
 }
 
@@ -830,7 +864,7 @@ export function createWebServer(port = 3000): void {
       const { riskAgent } = await import('../agents/risk.js');
       const { listRules } = await import('../core/rules.js');
       const { getOrCreateTreasuryPolicy } = await import('../core/treasury-policy.js');
-      const wallet = await getWalletData(demoUserId);
+      const wallet = await getOperatorWalletData();
       const portfolio = await routeMessage('show portfolio summary', demoUserId);
       const market = await routeMessage('show market conditions', demoUserId);
       const limits = await riskAgent.execute({ intent: 'get_limits', params: {}, userId: demoUserId });
@@ -842,18 +876,17 @@ export function createWebServer(port = 3000): void {
       const transactions = db.prepare(`
         SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
         FROM tx_log
-        WHERE user_id = ?
         ORDER BY created_at DESC
         LIMIT 20
-      `).all(demoUserId);
+      `).all();
 
       const x402Payments = db.prepare(`
         SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
         FROM tx_log
-        WHERE user_id = ? AND intent = 'x402_payment'
+        WHERE intent = 'x402_payment'
         ORDER BY created_at DESC
         LIMIT 10
-      `).all(demoUserId);
+      `).all();
 
       const receipts = (transactions as Array<Record<string, unknown>>).slice(0, 5).map((tx) => {
         let parsedMetadata: Record<string, unknown> | null = null;
@@ -1098,7 +1131,7 @@ export function createWebServer(port = 3000): void {
 
     const wallet = session
       ? await getWalletData(userId)
-      : { address: 'demo-read-only', chainName: 'Arbitrum One', mode: 'READ-ONLY' };
+      : { ...(await getOperatorWalletData()), mode: 'READ-ONLY' };
     send(ws, { type: 'wallet', wallet });
 
     // Replay event history so judges see the full autopilot decision trail

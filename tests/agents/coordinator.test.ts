@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { needsConfirmation, formatConfirmation } from '../../src/agents/coordinator.js';
+import { needsConfirmation, formatConfirmation, fallbackRouting } from '../../src/agents/coordinator.js';
 import type { RouteDecision } from '../../src/agents/types.js';
 
 describe('needsConfirmation', () => {
@@ -73,5 +73,19 @@ describe('formatConfirmation', () => {
       { agent: 'yield', intent: 'supply', params: { amount: '100', token: 'USDT' } },
     );
     expect(msg).toContain('YES');
+  });
+});
+
+describe('fallbackRouting', () => {
+  it('routes portfolio worry prompts to a portfolio assessment', () => {
+    const decision = fallbackRouting('should I be worried about my portfolio?');
+    expect(decision.agent).toBe('market');
+    expect(decision.intent).toBe('assess_portfolio');
+  });
+
+  it('keeps plain portfolio requests on the summary intent', () => {
+    const decision = fallbackRouting('show portfolio summary');
+    expect(decision.agent).toBe('market');
+    expect(decision.intent).toBe('portfolio_summary');
   });
 });

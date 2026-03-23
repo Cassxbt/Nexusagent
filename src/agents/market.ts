@@ -1,4 +1,4 @@
-import { getOperatorAccount } from '../core/wdk-setup.js';
+import { getRuntimeAccount } from '../core/wdk-setup.js';
 import { fromBaseUnits, resolveTokenAddress, resolveToken, ARBITRUM_TOKEN_LIST } from '../core/tokens.js';
 import { llmComplete } from '../reasoning/llm.js';
 import { logReasoning } from '../reasoning/logger.js';
@@ -7,6 +7,8 @@ import { getFearGreedSignal, getGoldSignal } from '../core/regime-signals.js';
 import type { Agent, AgentRequest, AgentResponse } from './types.js';
 import { getPortfolioDelta } from './autopilot.js';
 import { x402Fetch } from '../core/x402-client.js';
+import { getOrCreateTreasuryPolicy } from '../core/treasury-policy.js';
+import { getUserAccountContext } from '../core/account-context.js';
 
 // CoinGecko symbol -> id mapping (free API, no key needed)
 const COINGECKO_IDS: Record<string, string> = {
@@ -43,7 +45,7 @@ export const marketAgent: Agent = {
   description: 'Price data (dual-source: Bitfinex + CoinGecko), portfolio analysis, market conditions.',
 
   permissions: {
-    allowedIntents: ['get_price', 'get_history', 'portfolio_summary', 'market_conditions', 'get_premium_intel'],
+    allowedIntents: ['get_price', 'get_history', 'portfolio_summary', 'assess_portfolio', 'market_conditions', 'get_premium_intel'],
   },
 
   async execute(request: AgentRequest): Promise<AgentResponse> {
@@ -56,6 +58,8 @@ export const marketAgent: Agent = {
         return getHistory(params.base, params.quote, params.period);
       case 'portfolio_summary':
         return portfolioSummary(params.chain, userId);
+      case 'assess_portfolio':
+        return assessPortfolio(params.chain, userId);
       case 'market_conditions':
         return marketConditions();
       case 'get_premium_intel':
@@ -178,6 +182,98 @@ async function getHistory(
   }
 }
 
+interface PortfolioState {
+  address: string;
+  readableEth: string;
+  tokenBalances: { symbol: string; balance: string; usdValue?: string }[];
+  ethPrice: number;
+  totalUsdValue: number;
+  delta: string | null;
+  sourceLabel: string;
+}
+
+function getPortfolioSourceLabel(userId?: string): string {
+  if (!userId) return 'live server treasury';
+  const context = getUserAccountContext(userId, chainAlias('ethereum'));
+  if (context?.ownerAddress) return 'mapped WDK strategy account';
+  return 'live server treasury';
+}
+
+function chainAlias(chain: string): string {
+  return chain === 'arbitrum' || chain === 'arb' || chain === 'arbitrum one' ? 'ethereum' : chain;
+}
+
+async function loadPortfolioState(chain: string = 'ethereum', userId?: string): Promise<PortfolioState> {
+  const normalizedChain = chainAlias(chain);
+  const account = await getRuntimeAccount(normalizedChain, userId);
+  const address = await account.getAddress();
+  const nativeBalance = await account.getBalance();
+  const readableEth = fromBaseUnits(nativeBalance, 18);
+
+  const tokenBalances: { symbol: string; balance: string; usdValue?: string }[] = [];
+
+  for (const symbol of ARBITRUM_TOKEN_LIST) {
+    if (symbol === 'ETH') continue;
+    try {
+      const addr = resolveTokenAddress(symbol, normalizedChain);
+      if (!addr) continue;
+      const bal = await account.getTokenBalance(addr);
+      if (bal > 0n) {
+        const tokenInfo = resolveToken(symbol, normalizedChain);
+        tokenBalances.push({ symbol, balance: fromBaseUnits(bal, tokenInfo?.decimals ?? 18) });
+      }
+    } catch {
+      // Token may not exist on this chain
+    }
+  }
+
+  let ethPrice = 0;
+  let totalUsdValue = 0;
+  try {
+    const priceResult = await getPrice('ETH', 'USD');
+    if (priceResult.success && priceResult.data?.price) {
+      ethPrice = parseFloat(priceResult.data.price as string);
+      totalUsdValue += parseFloat(readableEth) * ethPrice;
+    }
+  } catch {
+    // Price may fail
+  }
+
+  for (const tok of tokenBalances) {
+    if (tok.symbol === 'USDT' || tok.symbol === 'USDC' || tok.symbol === 'DAI') {
+      const usdAmt = parseFloat(tok.balance);
+      totalUsdValue += usdAmt;
+      tok.usdValue = `$${usdAmt.toFixed(2)}`;
+    } else if (tok.symbol === 'XAUT') {
+      try {
+        const xautPriceRes = await getPrice('XAUT', 'USD');
+        if (xautPriceRes.success && xautPriceRes.data?.price) {
+          const xautPrice = parseFloat(xautPriceRes.data.price as string);
+          const xautUsd = parseFloat(tok.balance) * xautPrice;
+          totalUsdValue += xautUsd;
+          tok.usdValue = `$${xautUsd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+        }
+      } catch {
+        // Price may fail
+      }
+    } else if (tok.symbol === 'WETH') {
+      const wethUsd = parseFloat(tok.balance) * ethPrice;
+      totalUsdValue += wethUsd;
+      tok.usdValue = `$${wethUsd.toFixed(2)}`;
+    }
+  }
+
+  return {
+    address,
+    readableEth,
+    tokenBalances,
+    ethPrice,
+    totalUsdValue,
+    delta: getPortfolioDelta(totalUsdValue, userId),
+    sourceLabel: getPortfolioSourceLabel(userId),
+  };
+}
+
 async function portfolioSummary(chain: string = 'ethereum', userId?: string): Promise<AgentResponse> {
   logReasoning({
     agent: 'Market',
@@ -187,107 +283,136 @@ async function portfolioSummary(chain: string = 'ethereum', userId?: string): Pr
   });
 
   try {
-    const account = await getOperatorAccount(chain);
-    const address = await account.getAddress();
-    const nativeBalance = await account.getBalance();
-    const readableEth = fromBaseUnits(nativeBalance, 18);
-
-    // Scan ALL registered tokens (not just USDT)
-    const tokenBalances: { symbol: string; balance: string; usdValue?: string }[] = [];
-
-    for (const symbol of ARBITRUM_TOKEN_LIST) {
-      if (symbol === 'ETH') continue;
-      try {
-        const addr = resolveTokenAddress(symbol, chain);
-        if (!addr) continue;
-        const bal = await account.getTokenBalance(addr);
-        if (bal > 0n) {
-          const tokenInfo = resolveToken(symbol, chain);
-          tokenBalances.push({ symbol, balance: fromBaseUnits(bal, tokenInfo?.decimals ?? 18) });
-        }
-      } catch {
-        // Token may not exist on this chain
-      }
-    }
-
-    let ethPrice = 0;
-    let ethUsdValue = 'N/A';
-    let totalUsdValue = 0;
-    try {
-      const priceResult = await getPrice('ETH', 'USD');
-      if (priceResult.success && priceResult.data?.price) {
-        ethPrice = parseFloat(priceResult.data.price as string);
-        const ethAmt = parseFloat(readableEth);
-        const ethUsd = ethAmt * ethPrice;
-        ethUsdValue = `$${ethUsd.toFixed(2)}`;
-        totalUsdValue += ethUsd;
-      }
-    } catch {
-      // Price may fail
-    }
-
-    for (const tok of tokenBalances) {
-      if (tok.symbol === 'USDT' || tok.symbol === 'USDC' || tok.symbol === 'DAI') {
-        const usdAmt = parseFloat(tok.balance);
-        totalUsdValue += usdAmt;
-        tok.usdValue = `$${usdAmt.toFixed(2)}`;
-      } else if (tok.symbol === 'XAUT') {
-        try {
-          const xautPriceRes = await getPrice('XAUT', 'USD');
-          if (xautPriceRes.success && xautPriceRes.data?.price) {
-            const xautPrice = parseFloat(xautPriceRes.data.price as string);
-            const xautUsd = parseFloat(tok.balance) * xautPrice;
-            totalUsdValue += xautUsd;
-            tok.usdValue = `$${xautUsd.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
-          }
-        } catch {
-          // Price may fail
-        }
-      } else if (tok.symbol === 'WETH') {
-        const wethUsd = parseFloat(tok.balance) * ethPrice;
-        totalUsdValue += wethUsd;
-        tok.usdValue = `$${wethUsd.toFixed(2)}`;
-      }
-    }
-
-    const delta = getPortfolioDelta(totalUsdValue, userId);
-    const totalLine = totalUsdValue > 0
-      ? `Total: $${totalUsdValue.toFixed(2)}${delta ? ` (${delta})` : ''}`
+    const state = await loadPortfolioState(chain, userId);
+    const ethUsdValue = state.ethPrice > 0
+      ? `$${(parseFloat(state.readableEth) * state.ethPrice).toFixed(2)}`
+      : 'N/A';
+    const totalLine = state.totalUsdValue > 0
+      ? `Total: $${state.totalUsdValue.toFixed(2)}${state.delta ? ` (${state.delta})` : ''}`
       : null;
 
     const lines = [
       `*Portfolio on Arbitrum:*`,
-      `Address: \`${address.slice(0, 10)}...${address.slice(-8)}\``,
+      `Account: ${state.sourceLabel}`,
+      `Address: \`${state.address.slice(0, 10)}...${state.address.slice(-8)}\``,
       ...(totalLine ? [totalLine] : []),
       ``,
       `*Balances:*`,
-      `• ETH: ${readableEth}${ethUsdValue !== 'N/A' ? ` (${ethUsdValue})` : ''}`,
+      `• ETH: ${state.readableEth}${ethUsdValue !== 'N/A' ? ` (${ethUsdValue})` : ''}`,
     ];
 
-    for (const tok of tokenBalances) {
+    for (const tok of state.tokenBalances) {
       lines.push(`• ${tok.symbol}: ${tok.balance}${tok.usdValue ? ` (${tok.usdValue})` : ''}`);
     }
 
-    if (tokenBalances.length === 0) {
+    if (state.tokenBalances.length === 0) {
       lines.push(`• No token balances found`);
     }
 
     logReasoning({
       agent: 'Market',
       action: 'portfolioSummary',
-      reasoning: `Found ${tokenBalances.length} non-zero token balances. Total: $${totalUsdValue.toFixed(2)}`,
-      result: tokenBalances.map(t => `${t.symbol}:${t.balance}`).join(', ') || 'none',
+      reasoning: `Found ${state.tokenBalances.length} non-zero token balances. Total: $${state.totalUsdValue.toFixed(2)}`,
+      result: state.tokenBalances.map(t => `${t.symbol}:${t.balance}`).join(', ') || 'none',
       status: 'pass',
     });
 
     return {
       success: true,
       message: lines.join('\n'),
-      data: { chain, address, nativeBalance: readableEth, tokens: tokenBalances, ethPrice: String(ethPrice), totalUsdValue: String(totalUsdValue) },
+      data: { chain, address: state.address, nativeBalance: state.readableEth, tokens: state.tokenBalances, ethPrice: String(state.ethPrice), totalUsdValue: String(state.totalUsdValue), sourceLabel: state.sourceLabel },
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, message: `Portfolio summary failed: ${msg}` };
+  }
+}
+
+async function assessPortfolio(chain: string = 'ethereum', userId?: string): Promise<AgentResponse> {
+  logReasoning({
+    agent: 'Market',
+    action: 'assessPortfolio',
+    reasoning: `Assessing treasury risk posture for ${chain}`,
+    status: 'pass',
+  });
+
+  try {
+    const [state, fearGreed, goldSignal] = await Promise.all([
+      loadPortfolioState(chain, userId),
+      getFearGreedSignal(),
+      getGoldSignal(),
+    ]);
+    const policy = getOrCreateTreasuryPolicy(userId ?? 'demo');
+    const stableUsd = state.tokenBalances
+      .filter((token) => token.symbol === 'USDT' || token.symbol === 'USDC' || token.symbol === 'DAI')
+      .reduce((sum, token) => sum + parseFloat(token.balance), 0);
+    const xautUsd = state.tokenBalances
+      .filter((token) => token.symbol === 'XAUT' && token.usdValue)
+      .reduce((sum, token) => sum + Number(String(token.usdValue).replace(/[$,]/g, '')), 0);
+    const gasEth = parseFloat(state.readableEth);
+    const reserveGap = stableUsd - policy.reserveFloorUsdt;
+    const totalUsd = state.totalUsdValue;
+    const xautPct = totalUsd > 0 ? (xautUsd / totalUsd) * 100 : 0;
+
+    const findings: string[] = [];
+    let verdict = 'Portfolio looks stable.';
+
+    if (gasEth < 0.001) {
+      verdict = 'You should top up gas soon.';
+      findings.push(`Gas buffer is low at ${state.readableEth} ETH.`);
+    } else {
+      findings.push(`Gas buffer is healthy at ${state.readableEth} ETH.`);
+    }
+
+    if (reserveGap < 0) {
+      verdict = 'Reserve coverage is below policy.';
+      findings.push(`Stable reserve is $${Math.abs(reserveGap).toFixed(2)} below the $${policy.reserveFloorUsdt.toFixed(2)} floor.`);
+    } else {
+      findings.push(`Stable reserve is $${reserveGap.toFixed(2)} above the $${policy.reserveFloorUsdt.toFixed(2)} floor.`);
+    }
+
+    if ((fearGreed.value ?? 50) <= 40 && xautPct < (policy.targetXautPercent * 100) - 1) {
+      verdict = 'Risk-off conditions are active and XAUT protection is light.';
+      findings.push(`Risk-off regime detected (${fearGreed.classification ?? 'fear'}) while XAUT is only ${xautPct.toFixed(1)}%.`);
+    } else if (xautPct > 0) {
+      findings.push(`XAUT defense is active at ${xautPct.toFixed(1)}% of treasury.`);
+    } else {
+      findings.push('No XAUT defense is currently active.');
+    }
+
+    if (stableUsd > policy.reserveFloorUsdt + policy.minYieldDeployUsdt) {
+      findings.push(`Idle stable capital is available for Aave after protecting the reserve floor.`);
+    } else {
+      findings.push('There is little idle stable capital above the reserve floor.');
+    }
+
+    if (goldSignal.change24hPct !== null) {
+      findings.push(`Gold moved ${goldSignal.change24hPct >= 0 ? '+' : ''}${goldSignal.change24hPct.toFixed(2)}% over the last 24h.`);
+    }
+
+    const lines = [
+      `*Portfolio Risk Review*`,
+      `Account: ${state.sourceLabel}`,
+      `Verdict: ${verdict}`,
+      '',
+      ...findings.map((item) => `• ${item}`),
+    ];
+
+    return {
+      success: true,
+      message: lines.join('\n'),
+      data: {
+        address: state.address,
+        totalUsdValue: String(state.totalUsdValue),
+        reserveGap: reserveGap.toFixed(2),
+        xautPct: xautPct.toFixed(2),
+        fearGreedValue: fearGreed.value,
+        sourceLabel: state.sourceLabel,
+      },
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `Portfolio assessment failed: ${msg}` };
   }
 }
 

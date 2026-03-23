@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getPortfolioDelta } from '../../src/agents/autopilot.js';
+import { getPortfolioDelta, shouldSendAutopilotAlert } from '../../src/agents/autopilot.js';
 
 describe('getPortfolioDelta', () => {
   it('returns null when no snapshot exists', () => {
@@ -34,5 +34,27 @@ describe('autopilot config defaults', () => {
     const critical = 1.2;
     expect(critical).toBeLessThan(warn);
     expect(critical).toBeGreaterThan(1.0); // Above liquidation
+  });
+});
+
+describe('shouldSendAutopilotAlert', () => {
+  it('suppresses duplicate low-gas alerts within the cooldown window', () => {
+    const userId = `test-alert-${Date.now()}`;
+    const alert = '⛽ *Low ETH balance: 0.0004 ETH*\nConsider topping up to ensure uninterrupted operations.';
+    const start = 1_000_000;
+
+    expect(shouldSendAutopilotAlert(userId, alert, start)).toBe(true);
+    expect(shouldSendAutopilotAlert(userId, alert, start + 5 * 60 * 1000)).toBe(false);
+    expect(shouldSendAutopilotAlert(userId, alert, start + 61 * 60 * 1000)).toBe(true);
+  });
+
+  it('still emits immediately when the alert family changes severity', () => {
+    const userId = `test-alert-severity-${Date.now()}`;
+    const low = '⛽ *Low ETH balance: 0.0004 ETH*\nConsider topping up to ensure uninterrupted operations.';
+    const critical = '⛽ *Low ETH for gas: 0.00009 ETH*\nTransactions will fail without gas. Top up your wallet on Arbitrum.';
+    const start = 2_000_000;
+
+    expect(shouldSendAutopilotAlert(userId, low, start)).toBe(true);
+    expect(shouldSendAutopilotAlert(userId, critical, start + 60_000)).toBe(true);
   });
 });
