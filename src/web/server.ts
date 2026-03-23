@@ -8,6 +8,7 @@ import { getDb } from '../core/db.js';
 import {
   analyzeMessage,
   executeDecision,
+  executeSystemDecision,
   needsConfirmation,
   formatConfirmation,
 } from '../agents/coordinator.js';
@@ -90,6 +91,66 @@ const READ_ONLY_INTENTS = new Set([
   'quote_bridge',
   'unknown',
 ]);
+const JUDGE_DEMO_ACTION_USER_ID = process.env.NEXUS_JUDGE_DEMO_USER_ID || 'judge_demo_public';
+const JUDGE_DEMO_DAILY_BUDGET_USDT = 10;
+const OPERATOR_LIVE_USER_ID = process.env.NEXUS_OPERATOR_USER_ID || 'operator_live';
+let judgeDemoActionInFlight: string | null = null;
+
+type DemoActionName = 'swap_xaut' | 'supply_aave';
+
+function getTodayKey(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function getJudgeDemoBudgetUsed(): number {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT total
+    FROM risk_spending
+    WHERE user_id = ? AND date = ?
+  `).get(JUDGE_DEMO_ACTION_USER_ID, getTodayKey()) as { total: number } | undefined;
+  return row?.total ?? 0;
+}
+
+function buildJudgeDemoAction(action: DemoActionName): RouteDecision {
+  if (action === 'swap_xaut') {
+    return {
+      agent: 'swap',
+      intent: 'execute_swap',
+      params: {
+        amount: '1',
+        amountUsdt: '1',
+        tokenIn: 'USDT',
+        tokenOut: 'XAUT',
+        chain: 'ethereum',
+      },
+      receiptContext: {
+        source: 'judge_demo',
+        policy: 'judge_demo_action',
+        reason: 'Judge-triggered sealed demo action: swap 1 USDT to XAUT.',
+        summary: 'Judge Demo executed a real 1 USDT -> XAUT swap on the funded server treasury.',
+      },
+      systemActor: 'judge_demo',
+    };
+  }
+
+  return {
+    agent: 'yield',
+    intent: 'supply',
+    params: {
+      amount: '1',
+      token: 'USDT',
+      chain: 'ethereum',
+    },
+    receiptContext: {
+      source: 'judge_demo',
+      policy: 'judge_demo_action',
+      reason: 'Judge-triggered sealed demo action: supply 1 USDT to Aave.',
+      summary: 'Judge Demo supplied a real 1 USDT to Aave from the funded server treasury.',
+    },
+    systemActor: 'judge_demo',
+  };
+}
 
 function send(ws: WebSocket, data: WsOutbound): void {
   if (ws.readyState === WebSocket.OPEN) {
@@ -217,7 +278,7 @@ async function getOperatorWalletData(): Promise<WalletData> {
   }
 }
 
-async function buildDashboardState(userId: string, view: 'current' | 'demo') {
+async function buildDashboardState(userId: string, view: 'current' | 'demo' | 'operator') {
   const [{ getAccount, getOperatorAccount }, { fromBaseUnits, resolveTokenAddress }, { pricing }, { getFearGreedSignal, getGoldSignal }, { getOrCreateTreasuryPolicy }, { isAutopilotRunning }] = await Promise.all([
     import('../core/wdk-setup.js'),
     import('../core/tokens.js'),
@@ -227,10 +288,10 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     import('../agents/autopilot.js'),
   ]);
 
-  const account = view === 'demo'
+  const account = (view === 'demo' || view === 'operator')
     ? await getOperatorAccount('ethereum')
     : await getAccount('ethereum', { userId });
-  const wallet = view === 'demo'
+  const wallet = (view === 'demo' || view === 'operator')
     ? await getOperatorWalletData()
     : await getWalletData(userId);
   const accountContext = getUserAccountContext(userId, 'ethereum');
@@ -279,7 +340,7 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     expectedCycleMs: 5 * 60 * 1000,
   });
   const db = getDb();
-  const txRows = (view === 'demo'
+  const txRows = ((view === 'demo' || view === 'operator')
     ? db.prepare(`
         SELECT user_id, intent, agent, amount_usdt, tx_hash, status, created_at, metadata
         FROM tx_log
@@ -318,7 +379,7 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     };
   });
 
-  const x402Rows = (view === 'demo'
+  const x402Rows = ((view === 'demo' || view === 'operator')
     ? db.prepare(`
         SELECT amount_usdt, tx_hash, status, created_at
         FROM tx_log
@@ -360,12 +421,16 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
       ownerAddress: accountContext?.ownerAddress ?? null,
       strategyAddress: wallet.address,
       model: view === 'demo'
-        ? 'Read-only mirror of the live server treasury'
+        ? 'Read-only mirror of the live server treasury with two sealed real demo actions'
+        : view === 'operator'
+          ? 'Private operator mode on the funded server treasury'
         : accountContext?.ownerAddress
           ? 'Wallet-authenticated identity + Nexus-managed WDK strategy account'
           : 'Live server treasury',
       limitation: view === 'demo'
-        ? 'Judge Demo is inspect-only. It mirrors the funded server treasury without exposing write access.'
+        ? 'Judge Demo mirrors the funded server treasury. Arbitrary writes are disabled; only two fixed 1 USDT demo actions are allowed.'
+        : view === 'operator'
+          ? 'Operator Mode is private and token-gated. Actions execute directly against the funded server treasury.'
         : accountContext?.ownerAddress
           ? 'The connected wallet authenticates the user. Execution currently runs from the mapped WDK strategy account.'
           : 'Autopilot and execution currently run from the funded server treasury.',
@@ -390,7 +455,19 @@ async function buildDashboardState(userId: string, view: 'current' | 'demo') {
     receipts,
     x402Payments: x402Rows,
     sourceHealth: heartbeat.sources,
-    reasoning: getReasoningLog(view === 'demo' ? 'autopilot' : userId),
+    reasoning: getReasoningLog(view === 'demo' ? 'autopilot' : view === 'operator' ? OPERATOR_LIVE_USER_ID : userId),
+    demoActions: view === 'demo'
+      ? {
+          available: true,
+          inFlight: judgeDemoActionInFlight,
+          dailyBudgetUsdt: JUDGE_DEMO_DAILY_BUDGET_USDT,
+          dailyBudgetUsedUsdt: getJudgeDemoBudgetUsed(),
+          actions: [
+            { id: 'swap_xaut', label: 'Swap 1 USDT to XAUT' },
+            { id: 'supply_aave', label: 'Supply 1 USDT to Aave' },
+          ],
+        }
+      : null,
   };
 }
 
@@ -494,6 +571,34 @@ async function handleMessage(
     const msg = err instanceof Error ? err.message : String(err);
     send(ws, { type: 'error', content: sanitize(msg) });
   }
+}
+
+function resolveWsExecutionContext(params: {
+  sessionUserId?: string | null;
+  hasApiToken: boolean;
+  mode?: string | null;
+}): { userId: string; isAuthenticated: boolean; walletMode: WalletData } {
+  if (params.hasApiToken && params.mode === 'operator') {
+    return {
+      userId: OPERATOR_LIVE_USER_ID,
+      isAuthenticated: true,
+      walletMode: { address: 'operator-live', chainName: 'Arbitrum One', mode: 'OPERATOR' },
+    };
+  }
+
+  if (params.sessionUserId) {
+    return {
+      userId: params.sessionUserId,
+      isAuthenticated: true,
+      walletMode: { address: 'session-wallet', chainName: 'Arbitrum One', mode: 'SESSION' },
+    };
+  }
+
+  return {
+    userId: resolveSocketUserId(params.sessionUserId),
+    isAuthenticated: false,
+    walletMode: { address: 'demo-read-only', chainName: 'Arbitrum One', mode: 'READ-ONLY' },
+  };
 }
 
 export function createWebServer(port = 3000): void {
@@ -609,10 +714,16 @@ export function createWebServer(port = 3000): void {
     try {
       const sessionToken = getSessionToken(req);
       const session = sessionToken ? getWebSession(sessionToken) : null;
+      const hasApiToken = hasValidApiToken(req, webToken);
       const requestedView = typeof req.query.view === 'string' ? req.query.view : '';
-      const useDemo = requestedView === 'demo' || !session;
-      const userId = useDemo ? (process.env.NEXUS_DEMO_USER_ID || 'demo') : session.userId;
-      const dashboard = await buildDashboardState(userId, useDemo ? 'demo' : 'current');
+      const useOperator = requestedView === 'operator' && hasApiToken;
+      const useDemo = !useOperator && (requestedView === 'demo' || !session);
+      const userId = useOperator
+        ? OPERATOR_LIVE_USER_ID
+        : useDemo
+          ? (process.env.NEXUS_DEMO_USER_ID || 'demo')
+          : (session?.userId ?? (process.env.NEXUS_DEMO_USER_ID || 'demo'));
+      const dashboard = await buildDashboardState(userId, useOperator ? 'operator' : useDemo ? 'demo' : 'current');
       res.json({ success: true, dashboard });
     } catch (err) {
       res.status(500).json({ success: false, error: sanitize(String(err)) });
@@ -928,6 +1039,47 @@ export function createWebServer(port = 3000): void {
     }
   });
 
+  // Judge demo actions — real, bounded, and sealed to two fixed 1 USDT flows on the funded server treasury.
+  app.post('/api/demo/action', express.json(), async (req, res) => {
+    const { action } = req.body as { action?: DemoActionName };
+    if (action !== 'swap_xaut' && action !== 'supply_aave') {
+      res.status(400).json({ success: false, error: 'unsupported demo action' });
+      return;
+    }
+
+    if (judgeDemoActionInFlight) {
+      res.status(409).json({ success: false, error: `demo action already running: ${judgeDemoActionInFlight}` });
+      return;
+    }
+
+    const used = getJudgeDemoBudgetUsed();
+    if ((used + 1) > JUDGE_DEMO_DAILY_BUDGET_USDT) {
+      res.status(429).json({
+        success: false,
+        error: `judge demo daily budget exhausted (${used.toFixed(2)} / ${JUDGE_DEMO_DAILY_BUDGET_USDT} USDT used)`,
+      });
+      return;
+    }
+
+    judgeDemoActionInFlight = action;
+    try {
+      const decision = buildJudgeDemoAction(action);
+      const result = await executeSystemDecision(decision, JUDGE_DEMO_ACTION_USER_ID, 'judge_demo');
+      res.status(result.success ? 200 : 422).json({
+        success: result.success,
+        action,
+        message: result.message,
+        result: result.data ?? null,
+        dailyBudgetUsdt: JUDGE_DEMO_DAILY_BUDGET_USDT,
+        dailyBudgetUsedUsdt: getJudgeDemoBudgetUsed(),
+      });
+    } catch (err) {
+      res.status(500).json({ success: false, error: sanitize(String(err)) });
+    } finally {
+      judgeDemoActionInFlight = null;
+    }
+  });
+
   // Transaction audit log — shows autonomous agent activity
   app.get('/api/tx-log', (req, res) => {
     try {
@@ -1115,6 +1267,7 @@ export function createWebServer(port = 3000): void {
   wss.on('connection', async (ws, req) => {
     // Token auth via query string: ws://localhost:3000?token=<WEB_ACCESS_TOKEN>
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+    const hasApiToken = webToken ? url.searchParams.get('token') === webToken : false;
     if (webToken) {
       const token = url.searchParams.get('token');
       if (token !== webToken) {
@@ -1127,11 +1280,17 @@ export function createWebServer(port = 3000): void {
 
     const sessionToken = url.searchParams.get('session');
     const session = sessionToken ? getWebSession(sessionToken) : null;
-    const userId = resolveSocketUserId(session?.userId);
+    const requestedMode = url.searchParams.get('mode');
+    const operatorMode = hasApiToken && requestedMode === 'operator';
+    const userId = operatorMode
+      ? OPERATOR_LIVE_USER_ID
+      : resolveSocketUserId(session?.userId);
 
-    const wallet = session
-      ? await getWalletData(userId)
-      : { ...(await getOperatorWalletData()), mode: 'READ-ONLY' };
+    const wallet = operatorMode
+      ? { ...(await getOperatorWalletData()), mode: 'OPERATOR' }
+      : session
+        ? await getWalletData(userId)
+        : { ...(await getOperatorWalletData()), mode: 'READ-ONLY' };
     send(ws, { type: 'wallet', wallet });
 
     // Replay event history so judges see the full autopilot decision trail
@@ -1155,14 +1314,16 @@ export function createWebServer(port = 3000): void {
       }
 
       if (msg.type === 'wallet_refresh') {
-        const updated = session
-          ? await getWalletData(userId)
-          : { address: 'demo-read-only', chainName: 'Arbitrum One', mode: 'READ-ONLY' };
+        const updated = operatorMode
+          ? { ...(await getOperatorWalletData()), mode: 'OPERATOR' }
+          : session
+            ? await getWalletData(userId)
+            : { ...(await getOperatorWalletData()), mode: 'READ-ONLY' };
         send(ws, { type: 'wallet', wallet: updated });
         return;
       }
 
-      const uid = session?.userId ?? userId;
+      const uid = operatorMode ? OPERATOR_LIVE_USER_ID : (session?.userId ?? userId);
 
       if (msg.type === 'confirm') {
         const pending = pendingActions.get(uid);
@@ -1232,7 +1393,7 @@ export function createWebServer(port = 3000): void {
           return;
         }
 
-        await handleMessage(ws, uid, msg.content.trim(), Boolean(session));
+        await handleMessage(ws, uid, msg.content.trim(), operatorMode || Boolean(session));
       }
     });
 
